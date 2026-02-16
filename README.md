@@ -1,5 +1,5 @@
 ---
-title: SWE Model Arena
+title: SWE-Model-Arena
 emoji: 🎯
 colorFrom: green
 colorTo: purple
@@ -11,48 +11,62 @@ pinned: false
 short_description: Model arena for software engineering tasks
 ---
 
-# SWE-Assistant-Arena: Interactive Platform for Evaluating Coding Assistants
+# SWE-Model-Arena: An Interactive Platform for Evaluating Agentic Coding Models
 
-Welcome to **SWE-Assistant-Arena**, a minimalist open-source platform for evaluating **coding assistants** on real software engineering tasks through head-to-head battles.
+Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating agentic coding ability of foundation models (FMs). Unlike traditional chatbot arenas that test text generation, SWE-Model-Arena benchmarks models as **autonomous coding agents** — they read files, write code, run commands, and produce real git diffs in head-to-head battles.
 
-## 🤖 Supported Assistants
+## Key Features
 
-The arena currently supports **5 coding assistants** via [VibeKit](https://github.com/superassistant-ai/vibekit):
+- **Agentic Coding Evaluation**: Models don't just answer questions — they operate as full coding agents via [opencode](https://opencode.ai), reading files, writing code, and executing commands in isolated environments.
+- **RepoChat Integration**: Automatically inject repository context (issues, commits, PRs) from GitHub, GitLab, and Hugging Face into agent sessions for realistic evaluations.
+- **Multi-Round Agent Interactions**: Engage in follow-up rounds with each agent, testing their ability to iterate and refine code across multiple turns.
+- **Git Diff Comparison**: View real git diffs produced by each agent side-by-side, comparing actual code changes rather than just text responses.
+- **Advanced Evaluation Metrics**: Assess models using a comprehensive suite of metrics including:
+  - **Traditional ranking metrics**: Elo ratings and win rates to measure overall model performance
+  - **Network-based metrics**: Eigenvector centrality and PageRank to identify influential models in head-to-head comparisons
+  - **Community detection metrics**: Newman modularity to reveal clusters of models with similar capabilities
+  - **Consistency metrics**: Self-play match analysis to quantify model determinism and reliability
+  - **Efficiency metrics**: Conversation efficiency index to measure coding quality relative to round count
+- **Transparent, Open-Source Leaderboard**: View real-time model rankings with full transparency.
+- **Intelligent Request Filtering**: Employ `gpt-oss-safeguard-20b` as a guardrail to automatically filter out non-software-engineering-related requests, ensuring focused and relevant evaluations.
 
-- **Claude** - Anthropic's Claude Code CLI
-- **Gemini** - Google's Gemini CLI
-- **Codex** - OpenAI's Codex CLI
-- **OpenCode** - OpenCode CLI
-- **Grok** - xAI's Grok CLI
+## Why SWE-Model-Arena?
 
-## ✨ Key Features
+Existing evaluation frameworks (e.g. [LMArena](https://lmarena.ai)) test models on text generation tasks. SWE-Model-Arena goes further by evaluating models as **autonomous coding agents**:
 
-- **Real Code Execution**: Assistants work in sandboxed environments via VibeKit
-- **Random Head-to-Head Battles**: Two random assistants compete on each task
-- **Minimalist Design**: Clean, focused interface with no unnecessary features
-- **Elo Rating System**: Track assistant performance with Elo rankings
-- **Real-time Voting**: Vote on which assistant produces better code
-- **Transparent Leaderboard**: See wins, losses, and Elo ratings for all assistants
+- Models operate in real git repositories, producing actual code changes
+- Evaluation captures the full agentic loop: file reading, code writing, command execution, and iterative refinement
+- Repository-level context through RepoChat simulates real-world development scenarios
+- Multidimensional metrics provide nuanced comparisons beyond simple text quality
+- Side-by-side git diff comparison lets users evaluate actual coding output
 
-## 🚀 Quick Start
+## How It Works
+
+1. **Submit a Task**: Sign in and input your SE-related coding task (optional: include a GitHub/GitLab/HuggingFace URL for repository context)
+2. **Agents Execute**: Two anonymous models, each powered by [opencode](https://opencode.ai) via [OpenRouter](https://openrouter.ai), work on your task in isolated temp directories
+3. **Compare Output**: View agent output and git diffs side-by-side
+4. **Follow Up**: Send additional instructions to either agent for multi-round refinement
+5. **Vote**: Choose the better agent based on code quality, correctness, and approach
+
+## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+ installed
-- API keys for the assistants you want to use
-- [E2B](https://e2b.dev/) account and API key (for sandboxed code execution)
+- Python 3.10+
+- A [Hugging Face](https://huggingface.co) account (for voting)
+- An [OpenRouter](https://openrouter.ai) API key
 
-### Installation
+### Local Development
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/Software-Engineering-Arena/SWE-Assistant-Arena.git
-cd SWE-Assistant-Arena
+git clone https://github.com/Software-Engineering-Arena/SWE-Model-Arena.git
+cd SWE-Model-Arena
 ```
 
 2. **Install dependencies**:
 ```bash
-npm install
+pip install -r requirements.txt
 ```
 
 3. **Configure environment variables**:
@@ -62,115 +76,69 @@ cp .env.example .env
 
 Edit `.env` and add your API keys:
 ```env
-# Required: E2B for sandboxed execution
-E2B_API_KEY=your_e2b_api_key
+# Required: OpenRouter for model routing
+OPENROUTER_API_KEY=your_openrouter_key
 
-# Add keys for assistants you want to use
-ANTHROPIC_API_KEY=your_anthropic_key
-GEMINI_API_KEY=your_gemini_key
-OPENAI_API_KEY=your_openai_key
-GROK_API_KEY=your_grok_key
+# Optional: for repository context fetching
+GITHUB_TOKEN=your_github_token
+GITLAB_TOKEN=your_gitlab_token
+
+# Required for vote persistence
+HF_TOKEN=your_huggingface_token
 ```
 
 4. **Start the server**:
 ```bash
-npm start
+python app.py
 ```
 
-5. **Open the arena**:
-Visit [http://localhost:7860](http://localhost:7860)
+5. **Open the arena**: Visit [http://localhost:7860](http://localhost:7860)
 
-## 🚀 Deploy to Hugging Face Spaces
+### Usage (Hosted)
 
-This app is ready to deploy on Hugging Face Spaces:
+1. Navigate to the [SWE-Model-Arena platform](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)
+2. Sign in with your Hugging Face account
+3. Enter your coding task (optionally include a repository URL for RepoChat context)
+4. Compare agent outputs and git diffs, engage in multi-round interactions
+5. Vote on which agent produced better code
 
-1. **Create a new Space** on [Hugging Face](https://huggingface.co/spaces)
-2. **Select Docker SDK** when creating the Space
-3. **Push this repository** to your Space
-4. **Add Secrets** in Space settings:
-   - `E2B_API_KEY`
-   - `ANTHROPIC_API_KEY`
-   - `GEMINI_API_KEY`
-   - `OPENAI_API_KEY`
-   - `GROK_API_KEY`
-5. Your Space will automatically build and deploy!
+## Architecture
 
-## 🎮 How to Use
+| Layer | Choice |
+|-------|--------|
+| Runtime | Python 3.10+ |
+| UI | Gradio (with HuggingFace OAuth) |
+| Agent engine | [opencode](https://opencode.ai) |
+| LLM routing | [OpenRouter](https://openrouter.ai) |
+| Guardrail | OpenRouter (`gpt-oss-safeguard-20b`) |
+| Data storage | HuggingFace Datasets |
+| Repository APIs | PyGithub, python-gitlab |
+| Leaderboard metrics | evalica + pandas |
 
-1. **Enter a coding task** in the prompt field (e.g., "Create a REST API endpoint for user authentication")
-2. **Click "Start Battle"** to execute two random assistants
-3. **Review the outputs** from both assistants, including execution time and logs
-4. **Vote** for which assistant produced better code
-5. **Check the leaderboard** to see rankings
+## Contributing
 
-## 📊 Leaderboard Metrics
+We welcome contributions from the community! Here's how you can help:
 
-- **Elo Rating**: Standard Elo rating system (starting at 1000)
-- **Wins/Losses/Ties**: Total match results
-- **Total Matches**: Number of battles participated in
+1. **Submit SE Tasks**: Share your real-world SE problems to enrich our evaluation dataset
+2. **Report Issues**: Found a bug or have a feature request? Open an issue in this repository
+3. **Enhance the Codebase**: Fork the repository, make your changes, and submit a pull request
 
-## 🛠️ Architecture
+## Privacy Policy
 
-The arena is built with:
+Your interactions are anonymized and used solely for improving SWE-Model-Arena and FM benchmarking. By using SWE-Model-Arena, you agree to our Terms of Service.
 
-- **Backend**: Node.js + Express
-- **Assistant Execution**: VibeKit SDK with E2B sandboxes
-- **Frontend**: Vanilla JavaScript with minimal dependencies
-- **Storage**: In-memory (for simplicity)
+## Future Plans
 
-## 🔒 Security
+- **Analysis of Real-World SE Workloads**: Identify common patterns and challenges in user-submitted agentic coding tasks
+- **Multi-Round Evaluation Metrics**: Develop specialized metrics for assessing agent adaptation and code refinement over successive turns
+- **Expanded Model Coverage**: Include additional providers and locally hosted models
+- **Sandbox Execution**: Integrate containerized execution environments for enhanced security
 
-- All code execution happens in isolated E2B sandboxes
-- No code runs on your local machine
-- VibeKit provides built-in security and secret redaction
+## Contact
 
-## 🤝 Contributing
+For inquiries or feedback, please [open an issue](https://github.com/Software-Engineering-Arena/SWE-Model-Arena/issues/new) in this repository. We welcome your contributions and suggestions!
 
-Contributions are welcome! To add features:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📝 API Endpoints
-
-- `GET /api/assistants/random` - Get two random assistants
-- `POST /api/battle/start` - Start a battle between two assistants
-- `POST /api/vote` - Submit a vote for a battle
-- `GET /api/leaderboard` - Get current leaderboard
-
-## 🚧 Roadmap
-
-- [ ] Persistent storage (database integration)
-- [ ] User authentication
-- [ ] Battle history viewing
-- [ ] Custom assistant configurations
-- [ ] More detailed execution metrics
-- [ ] Docker deployment setup
-- [ ] Support for more VibeKit assistants
-
-## 📚 Resources
-
-- [VibeKit Documentation](https://docs.vibekit.sh/)
-- [E2B Documentation](https://e2b.dev/docs)
-- [Original Paper](https://arxiv.org/abs/2502.01860)
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🙏 Acknowledgments
-
-- [VibeKit](https://github.com/superassistant-ai/vibekit) for assistant execution framework
-- [E2B](https://e2b.dev/) for sandboxed code execution
-- Original SWE-Arena concept and design
-
-## 📧 Contact
-
-For inquiries or feedback, please [open an issue](https://github.com/Software-Engineering-Arena/SWE-Assistant-Arena/issues) in this repository.
-
-## 📖 Citation
+## Citation
 
 Made with ❤️ for SWE-Model-Arena. If this work is useful to you, please consider citing our vision paper:
 

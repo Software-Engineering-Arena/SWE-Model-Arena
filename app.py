@@ -6,13 +6,16 @@ import asyncio
 import dotenv
 import evalica
 import gitlab
+import httpx
 import io
 import json
 import os
 import random
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 import warnings
 
 import gradio as gr
@@ -83,17 +86,17 @@ def _ensure_opencode():
         raise RuntimeError("opencode installation failed")
 
 
-def _write_agent_config(agent_dir, model_id, context_window):
+def _write_agent_config(agent_dir, model_id, context_window, port):
     """Write opencode.json in an agent's working directory.
 
-    Each agent gets its own ``opencode.json`` with the OpenRouter provider
-    and exactly one model registered.  The ``opencode run`` command is
-    executed with ``cwd=agent_dir`` so it picks up this config.
+    Each agent gets its own ``opencode.json`` with the OpenRouter provider,
+    exactly one model registered, and a server port for ``opencode serve``.
 
     Args:
         agent_dir: Path to the agent's working directory.
         model_id: OpenRouter model ID (e.g. "openai/gpt-5.2-codex").
         context_window: Model context window size.
+        port: TCP port for the opencode server.
     """
     display_name = model_id.split("/", 1)[-1] if "/" in model_id else model_id
 
@@ -118,11 +121,76 @@ def _write_agent_config(agent_dir, model_id, context_window):
                 },
             },
         },
+        "server": {
+            "port": port,
+        },
         "model": f"openrouter/{model_id}",
     }
     config_path = os.path.join(agent_dir, "opencode.json")
     with open(config_path, "w") as f:
         json.dump(config, f)
+
+
+# ---------------------------------------------------------------------------
+# opencode server management
+# ---------------------------------------------------------------------------
+
+# Global registry: port -> subprocess.Popen
+_server_processes = {}
+
+
+def find_free_port():
+    """Find a free TCP port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def start_opencode_server(agent_dir, port):
+    """Start opencode in headless server mode.
+
+    Args:
+        agent_dir: Working directory (must have opencode.json).
+        port: TCP port to listen on.
+
+    Returns:
+        The port number.
+    """
+    proc = subprocess.Popen(
+        ["opencode", "serve", "--port", str(port)],
+        cwd=agent_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _server_processes[port] = proc
+    _wait_for_server(port)
+    return port
+
+
+def _wait_for_server(port, timeout=30):
+    """Poll until the opencode server is accepting connections."""
+    deadline = time.time() + timeout
+    url = f"http://localhost:{port}/global/health"
+    while time.time() < deadline:
+        try:
+            resp = httpx.get(url, timeout=2)
+            if resp.status_code < 500:
+                return
+        except (httpx.ConnectError, httpx.ReadError):
+            pass
+        time.sleep(0.5)
+    raise TimeoutError(f"opencode server on port {port} not ready after {timeout}s")
+
+
+def stop_opencode_server(port):
+    """Terminate an opencode server process."""
+    proc = _server_processes.pop(port, None)
+    if proc:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 # Initialize opencode binary
@@ -902,57 +970,82 @@ def fetch_url_content(url):
 
 
 # ---------------------------------------------------------------------------
-# opencode agent dispatcher (uses ``opencode run`` for non-interactive mode)
+# opencode agent dispatcher (SDK-based with session continuity)
 # ---------------------------------------------------------------------------
 
-async def run_agent(prompt, agent_dir):
-    """Run a single opencode agent invocation via the CLI.
+def extract_output(response_data):
+    """Extract readable text from a message response dict.
 
-    The model and provider config are in agent_dir/opencode.json
-    (written by ``_write_agent_config`` before this is called).
-    Runs ``opencode run "prompt"`` with ``cwd=agent_dir`` so
-    opencode picks up the local config.
+    Works with both the raw HTTP JSON response and SDK objects.
+    """
+    parts_list = []
+    raw_parts = response_data.get("parts", []) if isinstance(response_data, dict) else []
+    for part in raw_parts:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            parts_list.append(part.get("text", ""))
+        elif part.get("type") == "tool":
+            tool_name = part.get("tool", "unknown")
+            state = part.get("state", {})
+            tool_output = state.get("content", "") if isinstance(state, dict) else ""
+            parts_list.append(f"[Tool: {tool_name}]\n{tool_output}")
+    return "\n\n".join(parts_list)
+
+
+async def run_agent(port, model_id, prompt, session_id=None):
+    """Run a single opencode agent invocation via the HTTP API.
+
+    Connects to a running opencode server and sends the prompt.
+    If ``session_id`` is provided, resumes that session (follow-up round)
+    so the agent retains full context from previous rounds.
 
     Args:
-        prompt: The user prompt.
-        agent_dir: Working directory (must have opencode.json).
+        port: The opencode server port for this agent.
+        model_id: OpenRouter model ID (e.g. "openai/gpt-5.2-codex").
+        prompt: The user prompt (with optional repo context prepended).
+        session_id: If provided, resume this session (follow-up round).
 
     Returns:
-        dict with keys: ok, output, error (if failed)
+        dict with keys: ok, output, session_id, error (if failed)
     """
-    cmd = ["opencode", "run", prompt]
-
+    base_url = f"http://localhost:{port}"
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=agent_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=AGENT_TIMEOUT
-        )
+        async with httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(AGENT_TIMEOUT, connect=30),
+        ) as client:
+            # Create session if needed
+            if session_id is None:
+                resp = await client.post("/session")
+                resp.raise_for_status()
+                session = resp.json()
+                session_id = session.get("id")
 
-        output = stdout.decode("utf-8", errors="replace")
-        error = stderr.decode("utf-8", errors="replace")
+            # Send message and wait for response
+            resp = await client.post(
+                f"/session/{session_id}/message",
+                json={
+                    "modelID": model_id,
+                    "providerID": "openrouter",
+                    "parts": [{"type": "text", "text": prompt}],
+                },
+            )
+            resp.raise_for_status()
+            response_data = resp.json()
 
-        if proc.returncode != 0:
-            return {"ok": False, "output": "", "error": error or f"Exit code {proc.returncode}"}
+            output = extract_output(response_data)
+            return {"ok": True, "output": output, "session_id": session_id}
 
-        return {"ok": True, "output": output}
-
-    except asyncio.TimeoutError:
-        proc.kill()
-        return {"ok": False, "output": "", "error": f"Agent timed out after {AGENT_TIMEOUT}s"}
     except Exception as e:
-        return {"ok": False, "output": "", "error": str(e)}
+        return {"ok": False, "output": "", "error": str(e), "session_id": session_id}
 
 
-async def run_first_round(prompt, left_dir, right_dir):
+async def run_first_round(left_port, right_port, left_model_id, right_model_id, prompt):
     """Run both agents in parallel for the first round."""
     result_a, result_b = await asyncio.gather(
-        run_agent(prompt, left_dir),
-        run_agent(prompt, right_dir),
+        run_agent(left_port, left_model_id, prompt),
+        run_agent(right_port, right_model_id, prompt),
     )
     return result_a, result_b
 
@@ -1632,11 +1725,14 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=False, value="Processing..."),
             )
 
-        def _cleanup_dirs(conversation_state):
-            """Clean up temp directories."""
-            for key in ["left_dir", "right_dir"]:
-                if key in conversation_state:
-                    shutil.rmtree(conversation_state[key], ignore_errors=True)
+        def _cleanup_agent_resources(conversation_state):
+            """Stop opencode servers and clean up temp directories."""
+            for port_key in ["left_port", "right_port"]:
+                if port_key in conversation_state:
+                    stop_opencode_server(conversation_state[port_key])
+            for dir_key in ["left_dir", "right_dir"]:
+                if dir_key in conversation_state:
+                    shutil.rmtree(conversation_state[dir_key], ignore_errors=True)
 
         def update_model_titles_and_responses(
             repo_url, user_input, models_state, conversation_state
@@ -1671,43 +1767,109 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             # Pick 2 random models
             selected = [random.choice(available_models) for _ in range(2)]
             models = {"left": selected[0], "right": selected[1]}
+            left_model_id = model_name_to_id[selected[0]]
+            right_model_id = model_name_to_id[selected[1]]
 
             # Create temp dirs
             left_dir = tempfile.mkdtemp(prefix="agent_left_")
             right_dir = tempfile.mkdtemp(prefix="agent_right_")
 
-            # Git init or clone, write opencode config (model baked into each dir's config)
-            for d, model_name in [(left_dir, selected[0]), (right_dir, selected[1])]:
-                if repo_url and repo_url.strip():
-                    clone_repo(repo_url, d)
-                else:
-                    subprocess.run(["git", "init"], cwd=d, capture_output=True)
-                _write_agent_config(d, model_name_to_id[model_name], model_context_window[model_name])
+            # Allocate ports for opencode servers
+            left_port = find_free_port()
+            right_port = find_free_port()
 
-            # Run both agents in parallel
+            def _cleanup_on_error():
+                """Stop servers and remove temp dirs on failure."""
+                stop_opencode_server(left_port)
+                stop_opencode_server(right_port)
+                shutil.rmtree(left_dir, ignore_errors=True)
+                shutil.rmtree(right_dir, ignore_errors=True)
+
             try:
+                # Git init or clone, write opencode config with server port
+                for d, model_name, port in [
+                    (left_dir, selected[0], left_port),
+                    (right_dir, selected[1], right_port),
+                ]:
+                    if repo_url and repo_url.strip():
+                        clone_repo(repo_url, d)
+                    else:
+                        subprocess.run(["git", "init"], cwd=d, capture_output=True)
+                    _write_agent_config(
+                        d, model_name_to_id[model_name],
+                        model_context_window[model_name], port,
+                    )
+
+                # Start opencode servers
+                start_opencode_server(left_dir, left_port)
+                start_opencode_server(right_dir, right_port)
+
+                # Run both agents in parallel via SDK
                 loop = asyncio.new_event_loop()
                 result_a, result_b = loop.run_until_complete(
-                    run_first_round(full_prompt, left_dir, right_dir)
+                    run_first_round(
+                        left_port, right_port,
+                        left_model_id, right_model_id,
+                        full_prompt,
+                    )
                 )
                 loop.close()
+
+                # Check agent results
+                if not result_a.get("ok") or not result_b.get("ok"):
+                    error = result_a.get("error", "") or result_b.get("error", "")
+                    raise Exception(f"Agent error: {error}")
+
+                # Capture diffs
+                diff_a = capture_diff(left_dir)
+                diff_b = capture_diff(right_dir)
+
+            except TimeoutError as e:
+                _cleanup_on_error()
+                return (
+                    gr.update(visible=False),                               # [0] guardrail_message
+                    gr.update(interactive=True, visible=True),              # [1] shared_input
+                    gr.update(interactive=True, visible=True),              # [2] repo_url
+                    gr.update(value="", visible=False),                     # [3] user_prompt_md
+                    gr.update(value="", visible=False),                     # [4] response_a_title
+                    gr.update(value="", visible=False),                     # [5] response_b_title
+                    gr.update(value=""),                                    # [6] response_a
+                    gr.update(value=""),                                    # [7] response_b
+                    gr.update(visible=False),                               # [8] multi_round_inputs
+                    gr.update(visible=False),                               # [9] vote_panel
+                    gr.update(visible=True, interactive=True, value="Submit"),  # [10] send_first
+                    gr.update(interactive=False),                           # [11] feedback
+                    models_state,                                           # [12] models_state
+                    conversation_state,                                     # [13] conversation_state
+                    gr.update(visible=True),                                # [14] timeout_popup
+                    gr.update(interactive=False),                           # [15] model_a_send
+                    gr.update(interactive=False),                           # [16] model_b_send
+                    gr.update(visible=False),                               # [17] thanks_message
+                )
             except Exception as e:
-                shutil.rmtree(left_dir, ignore_errors=True)
-                shutil.rmtree(right_dir, ignore_errors=True)
-                raise TimeoutError(str(e))
+                _cleanup_on_error()
+                return (
+                    gr.update(value=f"### Error: {str(e)}", visible=True),  # [0] guardrail_message
+                    gr.update(interactive=True, visible=True),              # [1] shared_input
+                    gr.update(interactive=True, visible=True),              # [2] repo_url
+                    gr.update(value="", visible=False),                     # [3] user_prompt_md
+                    gr.update(value="", visible=False),                     # [4] response_a_title
+                    gr.update(value="", visible=False),                     # [5] response_b_title
+                    gr.update(value=""),                                    # [6] response_a
+                    gr.update(value=""),                                    # [7] response_b
+                    gr.update(visible=False),                               # [8] multi_round_inputs
+                    gr.update(visible=False),                               # [9] vote_panel
+                    gr.update(visible=True, interactive=True, value="Submit"),  # [10] send_first
+                    gr.update(interactive=False),                           # [11] feedback
+                    models_state,                                           # [12] models_state
+                    conversation_state,                                     # [13] conversation_state
+                    gr.update(visible=False),                               # [14] timeout_popup
+                    gr.update(interactive=False),                           # [15] model_a_send
+                    gr.update(interactive=False),                           # [16] model_b_send
+                    gr.update(visible=False),                               # [17] thanks_message
+                )
 
-            # Check agent results
-            if not result_a.get("ok") or not result_b.get("ok"):
-                error = result_a.get("error", "") or result_b.get("error", "")
-                shutil.rmtree(left_dir, ignore_errors=True)
-                shutil.rmtree(right_dir, ignore_errors=True)
-                raise Exception(f"Agent error: {error}")
-
-            # Capture diffs
-            diff_a = capture_diff(left_dir)
-            diff_b = capture_diff(right_dir)
-
-            # Update state
+            # Update state (ports + session_ids kept for follow-up rounds)
             models_state.clear()
             models_state.update(models)
             conversation_state.clear()
@@ -1715,6 +1877,9 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 "left": selected[0], "right": selected[1],
                 "url": repo_url or "",
                 "left_dir": left_dir, "right_dir": right_dir,
+                "left_port": left_port, "right_port": right_port,
+                "left_session_id": result_a.get("session_id"),
+                "right_session_id": result_b.get("session_id"),
                 "left_rounds": [{"prompt": full_prompt, "output": result_a["output"], "diff": diff_a}],
                 "right_rounds": [{"prompt": full_prompt, "output": result_b["output"], "diff": diff_b}],
             })
@@ -1823,18 +1988,21 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         def handle_model_a_send(user_input, models_state, conversation_state):
             try:
-                agent_dir = conversation_state["left_dir"]
+                port = conversation_state["left_port"]
+                session_id = conversation_state["left_session_id"]
+                model_id = model_name_to_id[conversation_state["left"]]
 
                 loop = asyncio.new_event_loop()
                 result = loop.run_until_complete(
-                    run_agent(user_input, agent_dir)
+                    run_agent(port, model_id, user_input, session_id=session_id)
                 )
                 loop.close()
 
                 if not result.get("ok"):
                     raise Exception(result.get("error", "Agent failed"))
 
-                diff = capture_diff(agent_dir)
+                conversation_state["left_session_id"] = result["session_id"]
+                diff = capture_diff(conversation_state["left_dir"])
                 conversation_state["left_rounds"].append({
                     "prompt": user_input, "output": result["output"], "diff": diff,
                 })
@@ -1866,18 +2034,21 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         def handle_model_b_send(user_input, models_state, conversation_state):
             try:
-                agent_dir = conversation_state["right_dir"]
+                port = conversation_state["right_port"]
+                session_id = conversation_state["right_session_id"]
+                model_id = model_name_to_id[conversation_state["right"]]
 
                 loop = asyncio.new_event_loop()
                 result = loop.run_until_complete(
-                    run_agent(user_input, agent_dir)
+                    run_agent(port, model_id, user_input, session_id=session_id)
                 )
                 loop.close()
 
                 if not result.get("ok"):
                     raise Exception(result.get("error", "Agent failed"))
 
-                diff = capture_diff(agent_dir)
+                conversation_state["right_session_id"] = result["session_id"]
+                diff = capture_diff(conversation_state["right_dir"])
                 conversation_state["right_rounds"].append({
                     "prompt": user_input, "output": result["output"], "diff": diff,
                 })
@@ -1960,7 +2131,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             save_content_to_hf(conv_data, CONVERSATION_REPO, file_name, token)
 
             # Clean up temp dirs
-            _cleanup_dirs(conversation_state)
+            _cleanup_agent_resources(conversation_state)
 
             models_state.clear()
             conversation_state.clear()
