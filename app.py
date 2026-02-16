@@ -77,11 +77,12 @@ def _install_opencode():
 
 
 def _ensure_opencode():
-    """Always install the latest opencode binary at startup."""
+    """Install the opencode binary if not already present."""
     opencode_bin = os.path.join(os.path.expanduser("~"), ".opencode", "bin")
     if opencode_bin not in os.environ.get("PATH", ""):
         os.environ["PATH"] = opencode_bin + os.pathsep + os.environ.get("PATH", "")
-    _install_opencode()
+    if not shutil.which("opencode"):
+        _install_opencode()
     if not shutil.which("opencode"):
         raise RuntimeError("opencode installation failed")
 
@@ -1168,13 +1169,20 @@ def _checkout_ref(parsed_info, agent_dir):
 
 
 def capture_diff(agent_dir):
-    """Capture the cumulative git diff for an agent's working directory."""
+    """Capture the cumulative git diff for an agent's working directory.
+
+    Excludes opencode infrastructure files (opencode.json config and
+    .opencode/ session database) so only the agent's actual work appears.
+    """
     subprocess.run(
         ["git", "add", "-A"],
         cwd=agent_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     result = subprocess.run(
-        ["git", "diff", "--cached"],
+        [
+            "git", "diff", "--cached", "--",
+            ".", ":(exclude)opencode.json", ":(exclude).opencode",
+        ],
         cwd=agent_dir, capture_output=True, text=True,
     )
     return result.stdout[:100_000]
