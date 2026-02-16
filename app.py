@@ -974,30 +974,71 @@ def fetch_url_content(url):
 # opencode agent dispatcher (SDK-based with session continuity)
 # ---------------------------------------------------------------------------
 
-def extract_output(response_data):
-    """Extract readable text from a message response dict.
+def extract_output(messages_data):
+    """Extract readable text from opencode session messages.
 
-    Works with both the raw HTTP JSON response and SDK objects.
+    Accepts either:
+      - A list of ``{info, parts}`` message items (from ``GET /session/{id}/message``).
+      - A single ``{info, parts}`` dict (from ``POST /session/{id}/message``).
+
+    Only assistant-role messages are included.  Text parts and completed
+    tool parts are extracted; other part types (step_start, step_finish,
+    snapshot, patch) are silently skipped.
     """
+    # Normalise to a list of message items
+    if isinstance(messages_data, dict):
+        messages_data = [messages_data]
+    if not isinstance(messages_data, list):
+        return ""
+
     parts_list = []
-    raw_parts = response_data.get("parts", []) if isinstance(response_data, dict) else []
-    for part in raw_parts:
-        if not isinstance(part, dict):
+    for msg in messages_data:
+        if not isinstance(msg, dict):
             continue
-        if part.get("type") == "text":
-            parts_list.append(part.get("text", ""))
-        elif part.get("type") == "tool":
-            tool_name = part.get("tool", "unknown")
-            state = part.get("state", {})
-            tool_output = state.get("content", "") if isinstance(state, dict) else ""
-            parts_list.append(f"[Tool: {tool_name}]\n{tool_output}")
+        info = msg.get("info", msg)  # fallback: msg itself may be flat
+        # Only extract from assistant messages
+        if isinstance(info, dict) and info.get("role") not in ("assistant", None):
+            continue
+
+        raw_parts = msg.get("parts", [])
+        for part in raw_parts:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type", "")
+            if ptype == "text":
+                text = part.get("text", "")
+                if text:
+                    parts_list.append(text)
+            elif ptype == "tool":
+                tool_name = part.get("tool", "unknown")
+                state = part.get("state", {})
+                if isinstance(state, dict):
+                    status = state.get("status", "")
+                    title = state.get("title", "")
+                    if status == "completed":
+                        output = state.get("output", "")
+                        label = f"[Tool: {tool_name}]"
+                        if title:
+                            label += f" {title}"
+                        if output:
+                            parts_list.append(f"{label}\n{output}")
+                        else:
+                            parts_list.append(label)
+                    elif status == "error":
+                        error = state.get("error", "unknown error")
+                        parts_list.append(f"[Tool: {tool_name}] Error: {error}")
     return "\n\n".join(parts_list)
 
 
 async def run_agent(port, model_id, prompt, session_id=None):
     """Run a single opencode agent invocation via the HTTP API.
 
-    Connects to a running opencode server and sends the prompt.
+    Connects to a running opencode server and sends the prompt.  The
+    ``POST /session/{id}/message`` call blocks until the full agentic
+    loop completes (tool calls, file writes, etc.).  After the call
+    returns we fetch the complete message list via
+    ``GET /session/{id}/message`` to reliably obtain all output parts.
+
     If ``session_id`` is provided, resumes that session (follow-up round)
     so the agent retains full context from previous rounds.
 
@@ -1022,8 +1063,10 @@ async def run_agent(port, model_id, prompt, session_id=None):
                 resp.raise_for_status()
                 session = resp.json()
                 session_id = session.get("id")
+                print(f"[Agent:{port}] Created session: {session_id}")
 
-            # Send message and wait for response
+            # Send message — blocks until the agent finishes its full loop
+            print(f"[Agent:{port}] Sending message (model={model_id})...")
             resp = await client.post(
                 f"/session/{session_id}/message",
                 json={
@@ -1033,12 +1076,35 @@ async def run_agent(port, model_id, prompt, session_id=None):
                 },
             )
             resp.raise_for_status()
-            response_data = resp.json()
+            print(f"[Agent:{port}] Message POST returned {resp.status_code}, "
+                  f"body length={len(resp.text)}")
 
-            output = extract_output(response_data)
+            # ----------------------------------------------------------
+            # Fetch the full message history with parts.
+            # The POST response uses chunked streaming and may only
+            # contain the AssistantMessage metadata.  The GET endpoint
+            # reliably returns [{info, parts}, ...] for every message.
+            # ----------------------------------------------------------
+            msgs_resp = await client.get(f"/session/{session_id}/message")
+            msgs_resp.raise_for_status()
+            messages_data = msgs_resp.json()
+            print(f"[Agent:{port}] Fetched {len(messages_data) if isinstance(messages_data, list) else '?'} messages")
+
+            # Extract output from the last assistant message
+            output = extract_output(messages_data)
+            print(f"[Agent:{port}] Extracted output length: {len(output)}")
+
+            # If messages endpoint gave nothing, fall back to POST body
+            if not output:
+                print(f"[Agent:{port}] Falling back to POST response body")
+                post_data = resp.json()
+                output = extract_output(post_data)
+                print(f"[Agent:{port}] Fallback output length: {len(output)}")
+
             return {"ok": True, "output": output, "session_id": session_id}
 
     except Exception as e:
+        print(f"[Agent:{port}] Error: {e}")
         return {"ok": False, "output": "", "error": str(e), "session_id": session_id}
 
 
