@@ -1,0 +1,10 @@
+evalica
+gradio[oauth]
+gradio_leaderboard
+huggingface_hub
+openai
+opencode-ai
+pandas
+PyGithub
+python-dotenv
+python-gitlab

@@ -1,0 +1,13 @@
+# Environment variables
+.env
+
+# Python
+*.venv
+*.ipynb
+*.pyc
+__pycache__/
+
+# Editor
+.claude
+.vscode
+.omc
