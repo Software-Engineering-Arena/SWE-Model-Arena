@@ -1248,10 +1248,8 @@ async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port,
     """
     global_deadline = time.time() + BATTLE_TIMEOUT
 
-    shuffled = available_models[:]
-    random.shuffle(shuffled)
-    left_preferred = shuffled[0]
-    right_preferred = shuffled[1] if len(shuffled) > 1 else shuffled[0]
+    left_preferred = random.choice(available_models)
+    right_preferred = random.choice(available_models)
 
     (left_name, result_a), (right_name, result_b) = await asyncio.gather(
         run_agent_with_retry(
