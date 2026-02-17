@@ -2354,15 +2354,25 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             # Clean up temp dirs
             _cleanup_agent_resources(conversation_state)
 
+            # Capture model names before clearing state
+            model_a_name = models_state.get("left", "Unknown")
+            model_b_name = models_state.get("right", "Unknown")
+
             models_state.clear()
             conversation_state.clear()
+
+            thanks_text = (
+                "## Thanks for your vote! Identities revealed above.\n"
+                f"**Model A:** {model_a_name}\n\n"
+                f"**Model B:** {model_b_name}"
+            )
 
             return (
                 gr.update(value="", interactive=True, visible=True),    # [0] shared_input
                 gr.update(value="", interactive=True, visible=True),    # [1] repo_url
                 gr.update(value="", visible=False),                     # [2] user_prompt_md
-                gr.update(value="", visible=False),                     # [3] response_a_title
-                gr.update(value="", visible=False),                     # [4] response_b_title
+                gr.update(value=f"### Model A: {model_a_name}", visible=True),  # [3] response_a_title
+                gr.update(value=f"### Model B: {model_b_name}", visible=True),  # [4] response_b_title
                 gr.update(value=""),                                    # [5] response_a
                 gr.update(value=""),                                    # [6] response_b
                 gr.update(visible=False),                               # [7] multi_round_inputs
@@ -2370,7 +2380,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(value="Submit", interactive=True, visible=True),  # [9] send_first
                 gr.update(value="Tie", interactive=True),               # [10] feedback
                 get_leaderboard_data(vote_entry, use_cache=False),      # [11] leaderboard
-                gr.update(visible=True),                                # [12] thanks_message
+                gr.update(value=thanks_text, visible=True),             # [12] thanks_message
             )
 
         submit_feedback_btn.click(
