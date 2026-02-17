@@ -1124,7 +1124,7 @@ async def run_agent(port, model_id, prompt, session_id=None):
 
                         output = extract_output(messages)
                         if not output:
-                            output = f"Agent error: {error_name}"
+                            output = f"Model error: {error_name}"
                         return {"ok": True, "output": output, "session_id": session_id}
 
                     if completed is not None:
@@ -1146,7 +1146,7 @@ async def run_agent(port, model_id, prompt, session_id=None):
             output = extract_output(messages)
             if output:
                 return {"ok": True, "output": output, "session_id": session_id}
-            return {"ok": False, "output": "", "error": "Agent timed out", "session_id": session_id}
+            return {"ok": False, "output": "", "error": "Model timed out", "session_id": session_id}
 
     except Exception as e:
         # Detailed error logging for SDK exceptions
@@ -1420,7 +1420,7 @@ def format_all_rounds(rounds):
         formatted += (
             f"<div style='color: #006633; background-color: #f0fff0; "
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-            f"<strong>Agent:</strong> {r['output']}</div>\n\n"
+            f"<strong>Model:</strong> {r['output']}</div>\n\n"
         )
     if rounds and rounds[-1].get("diff"):
         formatted += f"\n**Git Diff:**\n```diff\n{rounds[-1]['diff']}\n```"
@@ -1781,8 +1781,8 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             "powered by [opencode](https://opencode.ai)"
         )
         gr.Markdown(
-            "*SWE-Model-Arena pits LLMs head-to-head in blind agentic coding battles. "
-            "Each model drives an [opencode](https://github.com/opencode-ai/opencode) agent that reads files, writes code, "
+            "*SWE-Model-Arena pits LLMs head-to-head in blind agentic coding comparisons. "
+            "Each model drives [opencode](https://github.com/opencode-ai/opencode) to read files, write code, "
             "runs commands, and produces real git diffs — identical scaffold, different brain. "
             "Community votes determine the rankings. "
             "For technical details, check out our [paper](https://arxiv.org/abs/2502.01860).*"
@@ -1826,18 +1826,18 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
     with gr.Tab("⚔️Arena"):
         gr.Markdown("# ⚔️ SWE-Model-Arena")
-        gr.Markdown("Blind head-to-head agentic coding battles — same scaffold (opencode), different LLM")
+        gr.Markdown("Blind head-to-head agentic coding model comparison — same scaffold (opencode), different LLM")
 
         gr.Markdown("### 📜 How It Works")
         gr.Markdown(
             f"""
-            - **Blind Comparison**: Submit a coding task to two anonymous agents, each backed by a randomly selected LLM (up to {len(available_models)} models).
-            - **Same Scaffold, Different Brain**: Both agents run [opencode](https://github.com/opencode-ai/opencode) — an agentic coding engine that reads files, writes code, and runs commands. Only the underlying LLM differs.
-            - **Real Diffs**: Each agent works in its own isolated git repo. You see the actual code changes, not just chat responses.
-            - **Multi-round & Vote**: Send follow-up instructions to either agent, then vote for the better one. Fair play — votes count only while identities stay hidden.
+            - **Blind Comparison**: Submit a coding task — two randomly selected LLMs will tackle it independently (up to {len(available_models)} models).
+            - **Same Scaffold, Different Brain**: Both models run on [opencode](https://github.com/opencode-ai/opencode) — an agentic coding engine that reads files, writes code, and runs commands. Only the underlying LLM differs.
+            - **Real Diffs**: Each model works in its own isolated git repo. You see the actual code changes, not just chat responses.
+            - **Multi-round & Vote**: Send follow-up instructions to either side, then vote for the better model. Fair play — votes count only while identities stay hidden.
             """
         )
-        gr.Markdown(f"*Note: Due to resource constraints, agent sessions that take longer than {AGENT_TIMEOUT} seconds will be terminated.*")
+        gr.Markdown(f"*Note: Due to resource constraints, sessions that take longer than {AGENT_TIMEOUT} seconds will be terminated.*")
 
         gr.Markdown("---")
         
@@ -1863,7 +1863,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         shared_input = gr.Textbox(
             show_label=False,
-            placeholder="Enter your task for both agents here.",
+            placeholder="Enter your task for both models here.",
             lines=2,
             interactive=False,
         )
@@ -1884,13 +1884,13 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             response_b_title = gr.Markdown(value="", visible=False)
 
         with gr.Row():
-            response_a = gr.Markdown(label="Response from Agent A")
-            response_b = gr.Markdown(label="Response from Agent B")
+            response_a = gr.Markdown(label="Response from Model A")
+            response_b = gr.Markdown(label="Response from Model B")
 
         # Timeout popup
         with gr.Row(visible=False) as timeout_popup:
             timeout_message = gr.Markdown(
-                f"### Timeout\n\nOne of the agents did not respond within {AGENT_TIMEOUT} seconds. Please try again."
+                f"### Timeout\n\nOne of the models did not respond within {AGENT_TIMEOUT} seconds. Please try again."
             )
             close_popup_btn = gr.Button("Okay")
 
@@ -1915,10 +1915,10 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         # Multi-round inputs, initially hidden
         with gr.Row(visible=False) as multi_round_inputs:
-            model_a_input = gr.Textbox(label="Agent A Input", lines=1)
-            model_a_send = gr.Button("Send to Agent A", interactive=False)
-            model_b_input = gr.Textbox(label="Agent B Input", lines=1)
-            model_b_send = gr.Button("Send to Agent B", interactive=False)
+            model_a_input = gr.Textbox(label="Model A Input", lines=1)
+            model_a_send = gr.Button("Send to Model A", interactive=False)
+            model_b_input = gr.Textbox(label="Model B Input", lines=1)
+            model_b_send = gr.Button("Send to Model B", interactive=False)
 
         model_a_input.change(
             fn=toggle_submit_button, inputs=model_a_input, outputs=model_a_send
@@ -2035,7 +2035,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     if not result.get("ok"):
                         err = result.get("error", "unknown")
                         print(f"[Arena] Agent {label} failed: {err}")
-                        result["output"] = f"**Agent error:** {err}"
+                        result["output"] = f"**Model error:** {err}"
 
                 # Capture diffs
                 diff_a = capture_diff(left_dir)
@@ -2113,8 +2113,8 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=True, visible=False),        # [1] shared_input
                 gr.update(interactive=True, visible=False),        # [2] repo_url
                 gr.update(value=display_content, visible=True),    # [3] user_prompt_md
-                gr.update(value="### Agent A", visible=True),      # [4] response_a_title
-                gr.update(value="### Agent B", visible=True),      # [5] response_b_title
+                gr.update(value="### Model A", visible=True),      # [4] response_a_title
+                gr.update(value="### Model B", visible=True),      # [5] response_b_title
                 gr.update(value=display_a),                        # [6] response_a
                 gr.update(value=display_b),                        # [7] response_b
                 gr.update(visible=True),                           # [8] multi_round_inputs
@@ -2131,10 +2131,10 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         # Feedback panel, initially hidden
         with gr.Column(visible=False) as vote_panel:
-            gr.Markdown("### Which agent do you prefer?")
+            gr.Markdown("### Which model do you prefer?")
             with gr.Row():
                 feedback = gr.Radio(
-                    choices=["Agent A", "Agent B", "Tie", "Tie (Both Bad)"],
+                    choices=["Model A", "Model B", "Tie", "Tie (Both Bad)"],
                     show_label=False,
                     value="Tie",
                     interactive=False,
@@ -2218,8 +2218,8 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 # Show error/timeout output in the panel instead of crashing
                 output = result.get("output", "")
                 if not result.get("ok"):
-                    err = result.get("error", "Agent failed")
-                    output = output or f"**Agent error:** {err}"
+                    err = result.get("error", "Model failed")
+                    output = output or f"**Model error:** {err}"
 
                 conversation_state["left_session_id"] = result.get("session_id", session_id)
                 diff = capture_diff(conversation_state["left_dir"])
@@ -2233,7 +2233,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
-                    gr.update(interactive=False, value="Send to Agent A"),
+                    gr.update(interactive=False, value="Send to Model A"),
                 )
             except TimeoutError:
                 return (
@@ -2241,7 +2241,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
-                    gr.update(interactive=True, value="Send to Agent A"),
+                    gr.update(interactive=True, value="Send to Model A"),
                 )
             except Exception as e:
                 raise gr.Error(str(e))
@@ -2267,8 +2267,8 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 # Show error/timeout output in the panel instead of crashing
                 output = result.get("output", "")
                 if not result.get("ok"):
-                    err = result.get("error", "Agent failed")
-                    output = output or f"**Agent error:** {err}"
+                    err = result.get("error", "Model failed")
+                    output = output or f"**Model error:** {err}"
 
                 conversation_state["right_session_id"] = result.get("session_id", session_id)
                 diff = capture_diff(conversation_state["right_dir"])
@@ -2282,7 +2282,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
-                    gr.update(interactive=False, value="Send to Agent B"),
+                    gr.update(interactive=False, value="Send to Model B"),
                 )
             except TimeoutError:
                 return (
@@ -2290,7 +2290,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
-                    gr.update(interactive=True, value="Send to Agent B"),
+                    gr.update(interactive=True, value="Send to Model B"),
                 )
             except Exception as e:
                 raise gr.Error(str(e))
@@ -2318,9 +2318,9 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         def submit_feedback(vote, models_state, conversation_state, token):
             match vote:
-                case "Agent A":
+                case "Model A":
                     winner = "left"
-                case "Agent B":
+                case "Model B":
                     winner = "right"
                 case "Tie":
                     winner = "tie"

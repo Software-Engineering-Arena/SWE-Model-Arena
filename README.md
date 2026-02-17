@@ -14,14 +14,14 @@ short_description: Model arena for software engineering tasks
 
 # SWE-Model-Arena: An Interactive Platform for Evaluating Agentic Coding Models
 
-Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating the agentic coding ability of tool-use-capable foundation models (FMs). Only models that support tool use are eligible; models lacking this capability are automatically detected and excluded. Both agents in each battle share the **same scaffolding**, [opencode](https://opencode.ai), with identical tool access, prompts, and sandboxed environments. The **only variable** is the underlying model, isolating raw model capability from scaffolding differences.
+Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating the agentic coding ability of tool-use-capable foundation models (FMs). Only models that support tool use are eligible; models lacking this capability are automatically detected and excluded. Both sides in each comparison share the **same scaffolding**, [opencode](https://opencode.ai), with identical tool access, prompts, and sandboxed environments. The **only variable** is the underlying model, isolating raw model capability from scaffolding differences.
 
 ## Key Features
 
 - **Agentic Coding Evaluation**: Models don't just answer questions. They operate as full coding agents via [opencode](https://opencode.ai), reading files, writing code, and executing commands in isolated environments.
-- **RepoChat Integration**: Automatically inject repository context (issues, commits, PRs) from GitHub, GitLab, and Hugging Face into agent sessions for realistic evaluations.
-- **Multi-Round Agent Interactions**: Engage in follow-up rounds with each agent, testing their ability to iterate and refine code across multiple turns.
-- **Git Diff Comparison**: View real git diffs produced by each agent side-by-side, comparing actual code changes rather than just text responses.
+- **RepoChat Integration**: Automatically inject repository context (issues, commits, PRs) from GitHub, GitLab, and Hugging Face into model sessions for realistic evaluations.
+- **Multi-Round Interactions**: Engage in follow-up rounds with each model, testing their ability to iterate and refine code across multiple turns.
+- **Git Diff Comparison**: View real git diffs produced by each model side-by-side, comparing actual code changes rather than just text responses.
 - **Advanced Evaluation Metrics**: Assess models using a comprehensive suite of metrics including:
   - **Traditional ranking metrics**: Elo ratings and win rates to measure overall model performance
   - **Network-based metrics**: Eigenvector centrality and PageRank to identify influential models in head-to-head comparisons
@@ -44,10 +44,10 @@ Existing evaluation frameworks (e.g. [LMArena](https://lmarena.ai)) test models 
 ## How It Works
 
 1. **Submit a Task**: Sign in and input your SE-related coding task (optional: include a GitHub/GitLab/HuggingFace URL for repository context)
-2. **Agents Execute**: Two randomly selected models work on your task via [OpenRouter](https://openrouter.ai), each in its own isolated directory
-3. **Compare Output**: View agent output and git diffs side-by-side
-4. **Follow Up**: Send additional instructions to either agent for multi-round refinement
-5. **Vote**: Choose the better agent based on code quality, correctness, and approach
+2. **Models Execute**: Two randomly selected models work on your task via [OpenRouter](https://openrouter.ai), each in its own isolated directory
+3. **Compare Output**: View model output and git diffs side-by-side
+4. **Follow Up**: Send additional instructions to either model for multi-round refinement
+5. **Vote**: Choose the better model based on code quality, correctness, and approach
 
 ## Getting Started
 
@@ -60,8 +60,8 @@ Existing evaluation frameworks (e.g. [LMArena](https://lmarena.ai)) test models 
 1. Navigate to the [SWE-Model-Arena platform](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)
 2. Sign in with your Hugging Face account
 3. Enter your coding task (optionally include a repository URL for RepoChat context)
-4. Compare agent outputs and git diffs, engage in multi-round interactions
-5. Vote on which agent produced better code
+4. Compare model outputs and git diffs, engage in multi-round interactions
+5. Vote on which model produced better code
 
 ## Contributing
 
@@ -77,7 +77,7 @@ Your interactions are anonymized and used solely for improving SWE-Model-Arena a
 ## Future Plans
 
 - **Analysis of Real-World SE Workloads**: Identify common patterns and challenges in user-submitted agentic coding tasks
-- **Multi-Round Evaluation Metrics**: Develop specialized metrics for assessing agent adaptation and code refinement over successive turns
+- **Multi-Round Evaluation Metrics**: Develop specialized metrics for assessing model adaptation and code refinement over successive turns
 - **Expanded Model Coverage**: Include additional providers and locally hosted models
 - **Sandbox Execution**: Integrate containerized execution environments for enhanced security
 
