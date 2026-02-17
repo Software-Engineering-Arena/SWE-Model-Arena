@@ -229,7 +229,7 @@ for _file in _api.list_repo_files(repo_id=MODEL_REPO, repo_type="dataset"):
     _model_name = _file.rsplit("/", 1)[-1].replace(".json", "")
     available_models.append(_model_name)
     model_context_window[_model_name] = _record["context_window"]
-    model_name_to_id[_model_name] = _record["model_id"]
+    model_name_to_id[_model_name] = _record["id"]
     model_organization[_model_name] = _model_name.split(": ")[0]
 
 
