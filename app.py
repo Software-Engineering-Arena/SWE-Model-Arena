@@ -1810,7 +1810,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
         gr.Markdown("---")
         gr.Markdown(
             """
-            Made with ❤️ for SWE-Model-Arena — powered by [opencode](https://opencode.ai). If this work is useful to you, please consider citing our vision paper:
+            Made with ❤️ for SWE-Model-Arena. If this work is useful to you, please consider citing our vision paper:
             ```
             @inproceedings{zhao2025se,
             title={SE Arena: An Interactive Platform for Evaluating Foundation Models in Software Engineering},
@@ -1826,7 +1826,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
     with gr.Tab("⚔️Arena"):
         gr.Markdown("# ⚔️ SWE-Model-Arena")
-        gr.Markdown("Blind head-to-head agentic coding battles — same scaffold ([opencode](https://opencode.ai)), different LLM")
+        gr.Markdown("Blind head-to-head agentic coding battles — same scaffold (opencode), different LLM")
 
         gr.Markdown("### 📜 How It Works")
         gr.Markdown(
