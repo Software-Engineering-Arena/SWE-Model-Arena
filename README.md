@@ -14,7 +14,7 @@ short_description: Model arena for software engineering tasks
 
 # SWE-Model-Arena: An Interactive Platform for Evaluating Agentic Coding Models
 
-Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating agentic coding ability of foundation models (FMs). Unlike traditional chatbot arenas that test text generation, SWE-Model-Arena benchmarks models as **autonomous coding agents** — they read files, write code, run commands, and produce real git diffs in head-to-head battles.
+Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating agentic coding ability of foundation models (FMs). Both agents in each battle share the **same scaffolding** — [opencode](https://opencode.ai) — with identical tool access, prompts, and sandboxed environments. The **only variable** is the underlying model, isolating raw model capability from scaffolding differences.
 
 ## Key Features
 
@@ -44,7 +44,7 @@ Existing evaluation frameworks (e.g. [LMArena](https://lmarena.ai)) test models 
 ## How It Works
 
 1. **Submit a Task**: Sign in and input your SE-related coding task (optional: include a GitHub/GitLab/HuggingFace URL for repository context)
-2. **Agents Execute**: Two anonymous models, each powered by [opencode](https://opencode.ai) via [OpenRouter](https://openrouter.ai), work on your task in isolated temp directories
+2. **Agents Execute**: Two randomly selected models work on your task via [OpenRouter](https://openrouter.ai), each in its own isolated directory
 3. **Compare Output**: View agent output and git diffs side-by-side
 4. **Follow Up**: Send additional instructions to either agent for multi-round refinement
 5. **Vote**: Choose the better agent based on code quality, correctness, and approach

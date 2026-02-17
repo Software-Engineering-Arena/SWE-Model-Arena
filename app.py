@@ -23,6 +23,7 @@ import pandas as pd
 
 from datetime import datetime
 from github import Auth, Github
+from opencode_ai import AsyncOpencode
 from urllib.parse import urlparse
 from gradio_leaderboard import Leaderboard, ColumnFilter
 from huggingface_hub import upload_file, hf_hub_download, HfApi
@@ -46,8 +47,10 @@ CONVERSATION_REPO = "SWE-Arena/conversation_data"
 MODEL_REPO = "SWE-Arena/model_data"
 LEADERBOARD_FILE = "model_arena"
 
-# Agent timeout in seconds (longer than chat — agents read/write files, run commands)
+# Per-model timeout in seconds (how long one agent attempt can run)
 AGENT_TIMEOUT = 300
+# Total timeout for the entire battle (including all retries)
+BATTLE_TIMEOUT = 600
 
 # Leaderboard update time frame in days
 LEADERBOARD_UPDATE_TIME_FRAME_DAYS = 365
@@ -56,8 +59,14 @@ LEADERBOARD_UPDATE_TIME_FRAME_DAYS = 365
 SHOW_HINT_STRING = True
 HINT_STRING = "Once signed in, your votes will be recorded securely."
 
-# System prefix to constrain agents to their working directory
+# System prompt sent to every agent at the start of a battle
 SYSTEM_PREFIX = (
+    "You are an expert software engineer. "
+    "The user will give you a task — follow their instructions precisely and completely. "
+    "Do exactly what is asked: no more, no less. "
+    "If the task involves writing or modifying code, produce clean, correct, and working code. "
+    "If the task involves debugging, identify and fix the root cause. "
+    "If the task involves explaining, be clear and concise. "
     "You MUST operate entirely within the current working directory. "
     "Do NOT read, write, or execute anything outside this directory."
 )
@@ -87,19 +96,20 @@ def _ensure_opencode():
         raise RuntimeError("opencode installation failed")
 
 
-def _write_agent_config(agent_dir, model_id, context_window, port):
-    """Write opencode.json in an agent's working directory.
+def _write_agent_config(agent_dir, model_name, port):
+    """Write opencode.json for a specific model.
 
-    Each agent gets its own ``opencode.json`` with the OpenRouter provider,
-    exactly one model registered, and a server port for ``opencode serve``.
+    Called before each server start (including retries with a different
+    model).  Only the selected model is registered so opencode uses it.
 
     Args:
         agent_dir: Path to the agent's working directory.
-        model_id: OpenRouter model ID (e.g. "openai/gpt-5.2-codex").
-        context_window: Model context window size.
+        model_name: Display name from available_models (e.g. "OpenAI: GPT-5.2-Codex").
         port: TCP port for the opencode server.
     """
-    display_name = model_id.split("/", 1)[-1] if "/" in model_id else model_id
+    model_id = model_name_to_id[model_name]
+    context_window = model_context_window[model_name]
+    display = model_id.split("/", 1)[-1] if "/" in model_id else model_id
 
     config = {
         "$schema": "https://opencode.ai/config.json",
@@ -113,7 +123,7 @@ def _write_agent_config(agent_dir, model_id, context_window, port):
                 },
                 "models": {
                     model_id: {
-                        "name": display_name,
+                        "name": display,
                         "limit": {
                             "context": context_window,
                             "output": 65536,
@@ -974,73 +984,61 @@ def fetch_url_content(url):
 # opencode agent dispatcher (SDK-based with session continuity)
 # ---------------------------------------------------------------------------
 
-def extract_output(messages_data):
-    """Extract readable text from opencode session messages.
+def extract_output(messages):
+    """Extract readable text from opencode SDK ``SessionMessagesResponse``.
 
-    Accepts either:
-      - A list of ``{info, parts}`` message items (from ``GET /session/{id}/message``).
-      - A single ``{info, parts}`` dict (from ``POST /session/{id}/message``).
+    Iterates over the message list returned by ``client.session.messages()``,
+    filters to assistant-role messages, and collects text parts and completed
+    tool parts.  Other part types (step_start, step_finish, snapshot, patch)
+    are silently skipped.
 
-    Only assistant-role messages are included.  Text parts and completed
-    tool parts are extracted; other part types (step_start, step_finish,
-    snapshot, patch) are silently skipped.
+    Args:
+        messages: ``SessionMessagesResponse`` — a list of
+            ``SessionMessagesResponseItem`` objects, each with ``.info``
+            and ``.parts``.
     """
-    # Normalise to a list of message items
-    if isinstance(messages_data, dict):
-        messages_data = [messages_data]
-    if not isinstance(messages_data, list):
-        return ""
-
     parts_list = []
-    for msg in messages_data:
-        if not isinstance(msg, dict):
-            continue
-        info = msg.get("info", msg)  # fallback: msg itself may be flat
+    for msg in messages:
         # Only extract from assistant messages
-        if isinstance(info, dict) and info.get("role") not in ("assistant", None):
+        if getattr(msg.info, "role", None) != "assistant":
             continue
 
-        raw_parts = msg.get("parts", [])
-        for part in raw_parts:
-            if not isinstance(part, dict):
-                continue
-            ptype = part.get("type", "")
+        for part in msg.parts:
+            ptype = getattr(part, "type", None)
             if ptype == "text":
-                text = part.get("text", "")
+                text = getattr(part, "text", "")
                 if text:
                     parts_list.append(text)
             elif ptype == "tool":
-                tool_name = part.get("tool", "unknown")
-                state = part.get("state", {})
-                if isinstance(state, dict):
-                    status = state.get("status", "")
-                    title = state.get("title", "")
-                    if status == "completed":
-                        output = state.get("output", "")
-                        label = f"[Tool: {tool_name}]"
-                        if title:
-                            label += f" {title}"
-                        if output:
-                            parts_list.append(f"{label}\n{output}")
-                        else:
-                            parts_list.append(label)
-                    elif status == "error":
-                        error = state.get("error", "unknown error")
-                        parts_list.append(f"[Tool: {tool_name}] Error: {error}")
+                tool_name = getattr(part, "tool", "unknown")
+                state = getattr(part, "state", None)
+                if state is None:
+                    continue
+                status = getattr(state, "status", "")
+                title = getattr(state, "title", "")
+                if status == "completed":
+                    output = getattr(state, "output", "")
+                    label = f"[Tool: {tool_name}]"
+                    if title:
+                        label += f" {title}"
+                    if output:
+                        parts_list.append(f"{label}\n{output}")
+                    else:
+                        parts_list.append(label)
+                elif status == "error":
+                    error = getattr(state, "error", "unknown error")
+                    parts_list.append(f"[Tool: {tool_name}] Error: {error}")
     return "\n\n".join(parts_list)
 
 
 async def run_agent(port, model_id, prompt, session_id=None):
-    """Run a single opencode agent invocation via the HTTP API.
+    """Run a single opencode agent invocation via the Python SDK.
 
-    Connects to a running opencode server and sends the prompt.  The
-    ``POST /session/{id}/message`` call blocks until the full agentic
-    loop completes (tool calls, file writes, etc.).  After the call
-    returns we fetch the complete message list via
-    ``GET /session/{id}/message`` to reliably obtain all output parts.
-
-    If ``session_id`` is provided, resumes that session (follow-up round)
-    so the agent retains full context from previous rounds.
+    Uses ``AsyncOpencode`` to create a session, send the prompt, and
+    poll for completion.  ``session.chat()`` is non-blocking — it kicks
+    off the agent and returns immediately.  We poll
+    ``session.messages()`` until the assistant message's
+    ``time.completed`` is set (agent finished) or we timeout.
 
     Args:
         port: The opencode server port for this agent.
@@ -1053,68 +1051,219 @@ async def run_agent(port, model_id, prompt, session_id=None):
     """
     base_url = f"http://localhost:{port}"
     try:
-        async with httpx.AsyncClient(
+        async with AsyncOpencode(
             base_url=base_url,
             timeout=httpx.Timeout(AGENT_TIMEOUT, connect=30),
         ) as client:
             # Create session if needed
             if session_id is None:
-                resp = await client.post("/session")
-                resp.raise_for_status()
-                session = resp.json()
-                session_id = session.get("id")
+                # extra_body={} ensures the SDK sends '{}' instead of
+                # 'null' which the opencode server rejects as malformed.
+                session = await client.session.create(extra_body={})
+                session_id = session.id
                 print(f"[Agent:{port}] Created session: {session_id}")
 
-            # Send message — blocks until the agent finishes its full loop
+            # Send message — kicks off the agent (non-blocking)
             print(f"[Agent:{port}] Sending message (model={model_id})...")
-            resp = await client.post(
-                f"/session/{session_id}/message",
-                json={
-                    "modelID": model_id,
-                    "providerID": "openrouter",
-                    "parts": [{"type": "text", "text": prompt}],
-                },
-            )
-            resp.raise_for_status()
-            print(f"[Agent:{port}] Message POST returned {resp.status_code}, "
-                  f"body length={len(resp.text)}")
+            try:
+                assistant_msg = await client.session.chat(
+                    id=session_id,
+                    model_id=model_id,
+                    provider_id="openrouter",
+                    parts=[{"type": "text", "text": prompt}],
+                )
+            except Exception as chat_err:
+                # Log the full error details for debugging
+                if hasattr(chat_err, "response"):
+                    print(f"[Agent:{port}] chat() error response: "
+                          f"status={chat_err.response.status_code} "
+                          f"body={chat_err.response.text[:500]}")
+                if hasattr(chat_err, "request"):
+                    req = chat_err.request
+                    print(f"[Agent:{port}] chat() request: "
+                          f"method={req.method} url={req.url} "
+                          f"body={req.content[:500] if req.content else 'empty'}")
+                raise
+            print(f"[Agent:{port}] chat() returned, polling for completion...")
 
             # ----------------------------------------------------------
-            # Fetch the full message history with parts.
-            # The POST response uses chunked streaming and may only
-            # contain the AssistantMessage metadata.  The GET endpoint
-            # reliably returns [{info, parts}, ...] for every message.
+            # Poll until the agent completes.  The assistant message's
+            # time.completed transitions from None -> timestamp when the
+            # agentic loop finishes.
             # ----------------------------------------------------------
-            msgs_resp = await client.get(f"/session/{session_id}/message")
-            msgs_resp.raise_for_status()
-            messages_data = msgs_resp.json()
-            print(f"[Agent:{port}] Fetched {len(messages_data) if isinstance(messages_data, list) else '?'} messages")
+            poll_interval = 3  # seconds between polls
+            deadline = time.time() + AGENT_TIMEOUT
+            messages = []
 
-            # Extract output from the last assistant message
-            output = extract_output(messages_data)
-            print(f"[Agent:{port}] Extracted output length: {len(output)}")
+            while time.time() < deadline:
+                await asyncio.sleep(poll_interval)
+                messages = await client.session.messages(session_id)
 
-            # If messages endpoint gave nothing, fall back to POST body
-            if not output:
-                print(f"[Agent:{port}] Falling back to POST response body")
-                post_data = resp.json()
-                output = extract_output(post_data)
-                print(f"[Agent:{port}] Fallback output length: {len(output)}")
+                # Find the last assistant message and check completion
+                for msg in reversed(messages):
+                    info = msg.info
+                    if getattr(info, "role", None) != "assistant":
+                        continue
 
-            return {"ok": True, "output": output, "session_id": session_id}
+                    completed = getattr(getattr(info, "time", None), "completed", None)
+                    error = getattr(info, "error", None)
+
+                    if error:
+                        error_name = getattr(error, "name", "unknown")
+                        error_data = getattr(error, "data", None)
+                        print(f"[Agent:{port}] Agent error: {error_name} data={error_data}")
+
+                        # Detect retryable "model doesn't support tool use"
+                        error_str = str(error_data) if error_data else ""
+                        if "tool use" in error_str.lower() or "No endpoints found" in error_str:
+                            print(f"[Agent:{port}] Model lacks tool-use support (retryable)")
+                            return {
+                                "ok": False, "output": "", "error": error_str,
+                                "session_id": session_id, "retryable": True,
+                            }
+
+                        output = extract_output(messages)
+                        if not output:
+                            output = f"Agent error: {error_name}"
+                        return {"ok": True, "output": output, "session_id": session_id}
+
+                    if completed is not None:
+                        print(f"[Agent:{port}] Agent completed")
+                        output = extract_output(messages)
+                        return {"ok": True, "output": output, "session_id": session_id}
+
+                    # Still running
+                    parts_count = len(msg.parts)
+                    print(f"[Agent:{port}] Running... (parts so far: {parts_count})")
+                    break  # found assistant msg, not done yet
+
+            # Timeout — abort the agent and return whatever we have
+            print(f"[Agent:{port}] Timed out after {AGENT_TIMEOUT}s, aborting...")
+            try:
+                await client.session.abort(session_id)
+            except Exception:
+                pass
+            output = extract_output(messages)
+            if output:
+                return {"ok": True, "output": output, "session_id": session_id}
+            return {"ok": False, "output": "", "error": "Agent timed out", "session_id": session_id}
 
     except Exception as e:
-        print(f"[Agent:{port}] Error: {e}")
-        return {"ok": False, "output": "", "error": str(e), "session_id": session_id}
+        # Detailed error logging for SDK exceptions
+        error_detail = str(e)
+        if hasattr(e, "status_code"):
+            error_detail = f"HTTP {e.status_code}: {e}"
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                body_preview = e.response.text[:1000]
+                print(f"[Agent:{port}] Error response body: {body_preview}")
+            except Exception:
+                pass
+        if hasattr(e, "request") and e.request is not None:
+            try:
+                req = e.request
+                req_body = req.content[:500] if req.content else b"(empty)"
+                print(f"[Agent:{port}] Error request: {req.method} {req.url} "
+                      f"body={req_body}")
+            except Exception:
+                pass
+        print(f"[Agent:{port}] Error: {error_detail}")
+        return {"ok": False, "output": "", "error": error_detail, "session_id": session_id}
 
 
-async def run_first_round(left_port, right_port, left_model_id, right_model_id, prompt):
-    """Run both agents in parallel for the first round."""
-    result_a, result_b = await asyncio.gather(
-        run_agent(left_port, left_model_id, prompt),
-        run_agent(right_port, right_model_id, prompt),
+async def run_agent_with_retry(agent_dir, port, prompt, preferred_model=None,
+                               exclude_models=None, global_deadline=None):
+    """Pick a model, configure + start opencode, run the agent.
+
+    On a retryable error (model lacks tool-use support or is unavailable),
+    stops the server, rewrites ``opencode.json`` with a different model,
+    restarts, and tries again.  Respects ``global_deadline`` — if the
+    total time budget is exhausted, returns whatever is available.
+
+    Returns:
+        (model_name, result_dict)
+    """
+    tried = set(exclude_models or [])
+    model_name = None
+    attempt = 0
+    use_preferred = (
+        preferred_model is not None and preferred_model not in tried
     )
-    return result_a, result_b
+
+    while True:
+        # Check global deadline
+        if global_deadline and time.time() >= global_deadline:
+            print(f"[Agent:{port}] Global timeout reached, giving up")
+            return model_name, {
+                "ok": False, "output": "",
+                "error": "Battle timeout — no model completed in time",
+                "session_id": None,
+            }
+
+        candidates = [m for m in available_models if m not in tried]
+        if not candidates:
+            return model_name, {
+                "ok": False, "output": "",
+                "error": "Every available model was tried — none worked",
+                "session_id": None,
+            }
+
+        if use_preferred:
+            model_name = preferred_model
+            use_preferred = False
+        else:
+            model_name = random.choice(candidates)
+
+        model_id = model_name_to_id[model_name]
+        attempt += 1
+
+        # (Re)write config for this model and (re)start the server
+        _write_agent_config(agent_dir, model_name, port)
+        try:
+            start_opencode_server(agent_dir, port)
+        except Exception as e:
+            print(f"[Agent:{port}] Server start failed for {model_name}: {e}")
+            tried.add(model_name)
+            continue
+
+        print(f"[Agent:{port}] Attempt {attempt}/{len(available_models)}: model={model_name}")
+        result = await run_agent(port, model_id, prompt)
+
+        if not result.get("retryable"):
+            # Success (or non-retryable error) — server stays running
+            return model_name, result
+
+        print(f"[Agent:{port}] Model {model_name} not usable, retrying with another...")
+        tried.add(model_name)
+        stop_opencode_server(port)
+
+
+async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port, prompt):
+    """Run both agents in parallel, each with independent model retry.
+
+    Pre-picks two *different* models so the left and right sides start
+    with distinct models.  Each side retries independently (rewriting
+    config + restarting server) if its model is not usable.  Both sides
+    share a global deadline (``BATTLE_TIMEOUT``).
+    """
+    global_deadline = time.time() + BATTLE_TIMEOUT
+
+    shuffled = available_models[:]
+    random.shuffle(shuffled)
+    left_preferred = shuffled[0]
+    right_preferred = shuffled[1] if len(shuffled) > 1 else shuffled[0]
+
+    (left_name, result_a), (right_name, result_b) = await asyncio.gather(
+        run_agent_with_retry(
+            left_dir, left_port, prompt,
+            preferred_model=left_preferred, global_deadline=global_deadline,
+        ),
+        run_agent_with_retry(
+            right_dir, right_port, prompt,
+            preferred_model=right_preferred, global_deadline=global_deadline,
+        ),
+    )
+    return left_name, right_name, result_a, result_b
 
 
 # ---------------------------------------------------------------------------
@@ -1838,12 +1987,6 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             repo_info = fetch_url_content(repo_url)
             full_prompt = build_prompt(user_input, repo_info)
 
-            # Pick 2 random models
-            selected = [random.choice(available_models) for _ in range(2)]
-            models = {"left": selected[0], "right": selected[1]}
-            left_model_id = model_name_to_id[selected[0]]
-            right_model_id = model_name_to_id[selected[1]]
-
             # Create temp dirs
             left_dir = tempfile.mkdtemp(prefix="agent_left_")
             right_dir = tempfile.mkdtemp(prefix="agent_right_")
@@ -1860,39 +2003,39 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 shutil.rmtree(right_dir, ignore_errors=True)
 
             try:
-                # Git init or clone, write opencode config with server port
-                for d, model_name, port in [
-                    (left_dir, selected[0], left_port),
-                    (right_dir, selected[1], right_port),
-                ]:
+                # Git init or clone in each temp dir
+                for d in [left_dir, right_dir]:
                     if repo_url and repo_url.strip():
                         clone_repo(repo_url, d)
                     else:
                         subprocess.run(["git", "init"], cwd=d, capture_output=True)
-                    _write_agent_config(
-                        d, model_name_to_id[model_name],
-                        model_context_window[model_name], port,
-                    )
 
-                # Start opencode servers
-                start_opencode_server(left_dir, left_port)
-                start_opencode_server(right_dir, right_port)
-
-                # Run both agents in parallel via SDK
+                # Run both agents in parallel with automatic retry.
+                # Each side writes its own opencode config, starts the
+                # server, runs the agent, and restarts with a new model
+                # if the current one is not usable.
                 loop = asyncio.new_event_loop()
-                result_a, result_b = loop.run_until_complete(
-                    run_first_round(
-                        left_port, right_port,
-                        left_model_id, right_model_id,
-                        full_prompt,
+                left_name, right_name, result_a, result_b = (
+                    loop.run_until_complete(
+                        run_first_round_with_retry(
+                            left_dir, right_dir,
+                            left_port, right_port,
+                            full_prompt,
+                        )
                     )
                 )
                 loop.close()
 
-                # Check agent results
-                if not result_a.get("ok") or not result_b.get("ok"):
-                    error = result_a.get("error", "") or result_b.get("error", "")
-                    raise Exception(f"Agent error: {error}")
+                selected = [left_name, right_name]
+                models = {"left": left_name, "right": right_name}
+
+                # Log agent errors but don't abort — show error in the
+                # agent's output panel so the user can still compare.
+                for label, result in [("A", result_a), ("B", result_b)]:
+                    if not result.get("ok"):
+                        err = result.get("error", "unknown")
+                        print(f"[Arena] Agent {label} failed: {err}")
+                        result["output"] = f"**Agent error:** {err}"
 
                 # Capture diffs
                 diff_a = capture_diff(left_dir)
@@ -2072,13 +2215,16 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 )
                 loop.close()
 
+                # Show error/timeout output in the panel instead of crashing
+                output = result.get("output", "")
                 if not result.get("ok"):
-                    raise Exception(result.get("error", "Agent failed"))
+                    err = result.get("error", "Agent failed")
+                    output = output or f"**Agent error:** {err}"
 
-                conversation_state["left_session_id"] = result["session_id"]
+                conversation_state["left_session_id"] = result.get("session_id", session_id)
                 diff = capture_diff(conversation_state["left_dir"])
                 conversation_state["left_rounds"].append({
-                    "prompt": user_input, "output": result["output"], "diff": diff,
+                    "prompt": user_input, "output": output, "diff": diff,
                 })
 
                 formatted = format_all_rounds(conversation_state["left_rounds"])
@@ -2118,13 +2264,16 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 )
                 loop.close()
 
+                # Show error/timeout output in the panel instead of crashing
+                output = result.get("output", "")
                 if not result.get("ok"):
-                    raise Exception(result.get("error", "Agent failed"))
+                    err = result.get("error", "Agent failed")
+                    output = output or f"**Agent error:** {err}"
 
-                conversation_state["right_session_id"] = result["session_id"]
+                conversation_state["right_session_id"] = result.get("session_id", session_id)
                 diff = capture_diff(conversation_state["right_dir"])
                 conversation_state["right_rounds"].append({
-                    "prompt": user_input, "output": result["output"], "diff": diff,
+                    "prompt": user_input, "output": output, "diff": diff,
                 })
 
                 formatted = format_all_rounds(conversation_state["right_rounds"])

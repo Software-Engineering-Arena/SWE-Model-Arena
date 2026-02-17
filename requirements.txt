@@ -4,6 +4,7 @@ gradio_leaderboard
 httpx
 huggingface_hub
 openai
+opencode-ai
 pandas
 PyGithub
 python-dotenv
