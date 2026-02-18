@@ -9,8 +9,10 @@ import gitlab
 import httpx
 import io
 import json
+import markdown as md_lib
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -1052,7 +1054,6 @@ def detect_folder_violation_error(error_message, agent_dir):
     
     if has_violation_pattern:
         # Look for absolute path references that are outside the agent directory
-        import re
         absolute_paths = re.findall(r'[/\\][a-zA-Z0-9_/\\.-]+', error_message)
         for path in absolute_paths:
             if agent_dir not in path and not path.startswith('./') and not path.startswith('../'):
@@ -1099,7 +1100,6 @@ def analyze_agent_output_for_violations(output, error, agent_dir):
         
         # Also check for absolute path usage in output
         if any(indicator in output_str for indicator in violation_indicators):
-            import re
             absolute_paths = re.findall(r'[/\\][a-zA-Z0-9_/\\.-]+', output)
             for path in absolute_paths:
                 if agent_dir not in path:
@@ -1589,32 +1589,37 @@ def format_all_rounds(rounds):
     agent produced file changes — the cumulative git diff up to that
     round.  Rendering the diff per-round (rather than once at the end)
     means successive responses always re-check and refresh the diff.
+    Model output is converted from Markdown to HTML via the markdown library.
     """
     SEPARATOR = (
         "<div style='text-align: center; color: #888888; margin: 16px 0; "
         "border-top: 1px solid #dddddd; padding-top: 10px;'>"
-        "<em>--- Follow-up ---</em></div>\n\n"
+        "<em>&#8213; Follow-up &#8213;</em></div>\n"
     )
     formatted = ""
     for i, r in enumerate(rounds):
         prompt = strip_context(r["prompt"]) if i == 0 else r["prompt"]
+        prompt_html = md_lib.markdown(prompt, extensions=["fenced_code", "tables", "nl2br"])
+        output_html = md_lib.markdown(r["output"], extensions=["fenced_code", "tables", "nl2br"])
         if i > 0:
             formatted += SEPARATOR
         formatted += (
             f"<div style='color: #0066cc; background-color: #f0f7ff; "
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-            f"<strong>User:</strong> {prompt}</div>\n\n"
+            f"<strong>User:</strong> {prompt_html}</div>\n"
         )
         formatted += (
             f"<div style='color: #006633; background-color: #f0fff0; "
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-            f"<strong>Model:</strong> {r['output']}</div>\n\n"
+            f"<strong>Model:</strong> {output_html}</div>\n"
         )
         if r.get("diff"):
-            formatted += (
-                f"\n**Git Diff (cumulative after round {i + 1}):**\n"
-                f"```diff\n{r['diff']}\n```\n\n"
+            diff_html = md_lib.markdown(
+                f"**Git Diff (cumulative after round {i + 1}):**\n"
+                f"```diff\n{r['diff']}\n```",
+                extensions=["fenced_code"],
             )
+            formatted += diff_html + "\n"
     return formatted
 
 

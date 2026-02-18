@@ -3,6 +3,7 @@ gradio[oauth]
 gradio_leaderboard
 httpx
 huggingface_hub
+markdown
 openai
 opencode-ai
 pandas
