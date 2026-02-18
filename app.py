@@ -16,6 +16,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import uuid
 import warnings
 
 import gradio as gr
@@ -59,7 +60,9 @@ LEADERBOARD_UPDATE_TIME_FRAME_DAYS = 365
 SHOW_HINT_STRING = True
 HINT_STRING = "Once signed in, your votes will be recorded securely."
 
-# System prompt sent to every agent at the start of a battle
+# System prompt sent to every agent at the start of a battle.
+# NOTE: the agent's concrete workspace path is appended by build_prompt() at
+# runtime so the agent knows exactly where it may operate.
 SYSTEM_PREFIX = (
     "You are an expert software engineer. "
     "The user will give you a task — follow their instructions precisely and completely. "
@@ -67,11 +70,11 @@ SYSTEM_PREFIX = (
     "If the task involves writing or modifying code, produce clean, correct, and working code. "
     "If the task involves debugging, identify and fix the root cause. "
     "If the task involves explaining, be clear and concise. "
-    "CRITICAL CONSTRAINT: You MUST operate entirely within the current working directory. "
-    "ALL file operations (read, write, create, modify, execute) must be within this directory. "
-    "Do NOT access any files or directories outside your current working directory. "
-    "Use relative paths only (e.g., './file.py', 'subdir/file.txt'), never absolute paths like '/tmp/', '/home/', etc. "
-    "If you attempt to access files outside the working directory, the operation will fail."
+    "WORKSPACE CONSTRAINT: You have been given a dedicated workspace directory (see below). "
+    "ALL file operations (read, write, create, modify, execute) must stay within that directory. "
+    "You may use either relative paths (e.g. './src/foo.py') or absolute paths that are "
+    "inside your workspace directory. "
+    "Do NOT read or write files outside your workspace — those operations will fail."
 )
 
 # ---------------------------------------------------------------------------
@@ -1374,13 +1377,18 @@ async def run_agent_with_retry(agent_dir, port, prompt, preferred_model=None,
         stop_opencode_server(port)
 
 
-async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port, prompt):
+async def run_first_round_with_retry(
+    left_dir, right_dir, left_port, right_port, left_prompt, right_prompt
+):
     """Run both agents in parallel, each with independent model retry.
 
     Pre-picks two *different* models so the left and right sides start
     with distinct models.  Each side retries independently (rewriting
     config + restarting server) if its model is not usable.  Both sides
     share a global deadline (``BATTLE_TIMEOUT``).
+
+    ``left_prompt`` and ``right_prompt`` are built with the respective
+    agent_dir already injected, so each agent knows its exact workspace.
     """
     global_deadline = time.time() + BATTLE_TIMEOUT
 
@@ -1390,11 +1398,11 @@ async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port,
 
     (left_name, result_a), (right_name, result_b) = await asyncio.gather(
         run_agent_with_retry(
-            left_dir, left_port, prompt,
+            left_dir, left_port, left_prompt,
             preferred_model=left_preferred, global_deadline=global_deadline,
         ),
         run_agent_with_retry(
-            right_dir, right_port, prompt,
+            right_dir, right_port, right_prompt,
             preferred_model=right_preferred, global_deadline=global_deadline,
         ),
     )
@@ -1405,9 +1413,24 @@ async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port,
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-def build_prompt(user_prompt, repo_context=""):
-    """Build the full prompt with system prefix and optional repo context."""
+def build_prompt(user_prompt, repo_context="", agent_dir=None):
+    """Build the full prompt with system prefix and optional repo context.
+
+    Args:
+        user_prompt: The user's task description.
+        repo_context: Optional fetched content from a repo URL.
+        agent_dir: Absolute path to this agent's isolated workspace directory.
+            When provided, it is injected into the prompt so the agent knows
+            exactly where it is allowed to operate.
+    """
     parts = [SYSTEM_PREFIX]
+    if agent_dir:
+        parts.append(
+            f"Your workspace directory is: {agent_dir}\n"
+            "All file operations must stay within this directory. "
+            "You may use relative paths (they resolve here automatically) "
+            "or absolute paths that start with this directory."
+        )
     if repo_context:
         parts.append(f"Repository context:\n{repo_context}")
     parts.append(f"Inquiry: {user_prompt}")
@@ -2114,13 +2137,21 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     gr.update(visible=False),
                 )
 
-            # Fetch repo context and build prompt
+            # Fetch repo context
             repo_info = fetch_url_content(repo_url)
-            full_prompt = build_prompt(user_input, repo_info)
 
-            # Create temp dirs
-            left_dir = tempfile.mkdtemp(prefix="agent_left_")
-            right_dir = tempfile.mkdtemp(prefix="agent_right_")
+            # Create temp dirs with UUID names to avoid stale-dir collisions
+            session_id = uuid.uuid4().hex
+            base_tmp = tempfile.gettempdir()
+            left_dir = os.path.join(base_tmp, f"agent_left_{session_id}")
+            right_dir = os.path.join(base_tmp, f"agent_right_{session_id}")
+            os.makedirs(left_dir, exist_ok=True)
+            os.makedirs(right_dir, exist_ok=True)
+
+            # Build per-agent prompts — each includes its concrete workspace
+            # path so the agent knows exactly where it is allowed to operate.
+            left_prompt = build_prompt(user_input, repo_info, agent_dir=left_dir)
+            right_prompt = build_prompt(user_input, repo_info, agent_dir=right_dir)
 
             # Allocate ports for opencode servers
             left_port = find_free_port()
@@ -2151,7 +2182,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                         run_first_round_with_retry(
                             left_dir, right_dir,
                             left_port, right_port,
-                            full_prompt,
+                            left_prompt, right_prompt,
                         )
                     )
                 )
@@ -2228,8 +2259,8 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 "left_port": left_port, "right_port": right_port,
                 "left_session_id": result_a.get("session_id"),
                 "right_session_id": result_b.get("session_id"),
-                "left_rounds": [{"prompt": full_prompt, "output": result_a["output"], "diff": diff_a}],
-                "right_rounds": [{"prompt": full_prompt, "output": result_b["output"], "diff": diff_b}],
+                "left_rounds": [{"prompt": left_prompt, "output": result_a["output"], "diff": diff_a}],
+                "right_rounds": [{"prompt": right_prompt, "output": result_b["output"], "diff": diff_b}],
             })
 
             # Format display
