@@ -1598,16 +1598,17 @@ def format_all_rounds(rounds):
     )
     formatted = ""
     for i, r in enumerate(rounds):
-        prompt = strip_context(r["prompt"]) if i == 0 else r["prompt"]
-        prompt_html = md_lib.markdown(prompt, extensions=["fenced_code", "tables", "nl2br"])
         output_html = md_lib.markdown(r["output"], extensions=["fenced_code", "tables", "nl2br"])
         if i > 0:
+            # Show follow-up separator and the user's follow-up prompt
+            prompt_html = md_lib.markdown(r["prompt"], extensions=["fenced_code", "tables", "nl2br"])
             formatted += SEPARATOR
-        formatted += (
-            f"<div style='color: #0066cc; background-color: #f0f7ff; "
-            f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-            f"<strong>User:</strong> {prompt_html}</div>\n"
-        )
+            formatted += (
+                f"<div style='color: #0066cc; background-color: #f0f7ff; "
+                f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                f"<strong>User:</strong> {prompt_html}</div>\n"
+            )
+        # The initial user query is already shown above the panel, so skip it here.
         formatted += (
             f"<div style='color: #006633; background-color: #f0fff0; "
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
