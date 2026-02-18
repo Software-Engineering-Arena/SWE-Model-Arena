@@ -6,7 +6,6 @@ colorTo: green
 sdk: gradio
 sdk_version: 5.50.0
 app_file: app.py
-suggested_hardware: cpu-upgrade
 hf_oauth: true
 pinned: false
 short_description: Model arena for software engineering tasks
