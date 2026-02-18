@@ -2404,12 +2404,12 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=False, value="Processing..."),
             )
 
-        def handle_model_a_send(user_input, current_response_a, models_state, conversation_state):
+        def handle_model_a_send(user_input, models_state, conversation_state):
             """Handle a follow-up message for Model A.
 
-            Appends the new exchange to the *existing* response panel content
-            so the full chat history is always visible.  The git diff is
-            re-captured after every round and shown inline.
+            Always regenerates the full display from conversation_state so the
+            complete history is rendered correctly from raw data, avoiding any
+            issues with reading processed HTML back from the Markdown component.
             """
             try:
                 port = conversation_state["left_port"]
@@ -2433,55 +2433,31 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 conversation_state["left_rounds"].append({
                     "prompt": user_input, "output": output, "diff": diff,
                 })
-                round_num = len(conversation_state["left_rounds"])
 
-                # Build this round's HTML and append to the existing display
-                # so the full history (including the initial response) is shown.
-                separator = (
-                    "<div style='text-align: center; color: #888888; margin: 16px 0; "
-                    "border-top: 1px solid #dddddd; padding-top: 10px;'>"
-                    "<em>--- Follow-up ---</em></div>\n\n"
-                )
-                new_html = (
-                    separator
-                    + f"<div style='color: #0066cc; background-color: #f0f7ff; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>User:</strong> {user_input}</div>\n\n"
-                    f"<div style='color: #006633; background-color: #f0fff0; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>Model:</strong> {output}</div>\n\n"
-                )
-                if diff:
-                    new_html += (
-                        f"\n**Git Diff (cumulative after round {round_num}):**\n"
-                        f"```diff\n{diff}\n```\n\n"
-                    )
-
-                updated_response = (current_response_a or "") + new_html
+                # Regenerate full display from state so history is always correct.
+                formatted = format_all_rounds(conversation_state["left_rounds"])
                 return (
-                    updated_response,
+                    formatted,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
                     gr.update(interactive=False, value="Send to Model A"),
                 )
             except TimeoutError:
-                # Preserve existing history; show the timeout popup.
+                formatted = format_all_rounds(conversation_state.get("left_rounds", []))
                 return (
-                    current_response_a,
+                    formatted,
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
                     gr.update(interactive=True, value="Send to Model A"),
                 )
             except Exception as e:
-                err_html = (
-                    f"<div style='color: #cc0000; background-color: #fff0f0; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>Error:</strong> {str(e)}</div>\n\n"
-                )
+                err_round = {"prompt": user_input, "output": f"**Error:** {str(e)}", "diff": ""}
+                display_rounds = conversation_state.get("left_rounds", []) + [err_round]
+                formatted = format_all_rounds(display_rounds)
                 return (
-                    (current_response_a or "") + err_html,
+                    formatted,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(interactive=True),
@@ -2494,12 +2470,12 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=False, value="Processing..."),
             )
 
-        def handle_model_b_send(user_input, current_response_b, models_state, conversation_state):
+        def handle_model_b_send(user_input, models_state, conversation_state):
             """Handle a follow-up message for Model B.
 
-            Appends the new exchange to the *existing* response panel content
-            so the full chat history is always visible.  The git diff is
-            re-captured after every round and shown inline.
+            Always regenerates the full display from conversation_state so the
+            complete history is rendered correctly from raw data, avoiding any
+            issues with reading processed HTML back from the Markdown component.
             """
             try:
                 port = conversation_state["right_port"]
@@ -2523,55 +2499,31 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 conversation_state["right_rounds"].append({
                     "prompt": user_input, "output": output, "diff": diff,
                 })
-                round_num = len(conversation_state["right_rounds"])
 
-                # Build this round's HTML and append to the existing display
-                # so the full history (including the initial response) is shown.
-                separator = (
-                    "<div style='text-align: center; color: #888888; margin: 16px 0; "
-                    "border-top: 1px solid #dddddd; padding-top: 10px;'>"
-                    "<em>--- Follow-up ---</em></div>\n\n"
-                )
-                new_html = (
-                    separator
-                    + f"<div style='color: #0066cc; background-color: #f0f7ff; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>User:</strong> {user_input}</div>\n\n"
-                    f"<div style='color: #006633; background-color: #f0fff0; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>Model:</strong> {output}</div>\n\n"
-                )
-                if diff:
-                    new_html += (
-                        f"\n**Git Diff (cumulative after round {round_num}):**\n"
-                        f"```diff\n{diff}\n```\n\n"
-                    )
-
-                updated_response = (current_response_b or "") + new_html
+                # Regenerate full display from state so history is always correct.
+                formatted = format_all_rounds(conversation_state["right_rounds"])
                 return (
-                    updated_response,
+                    formatted,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
                     gr.update(interactive=False, value="Send to Model B"),
                 )
             except TimeoutError:
-                # Preserve existing history; show the timeout popup.
+                formatted = format_all_rounds(conversation_state.get("right_rounds", []))
                 return (
-                    current_response_b,
+                    formatted,
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
                     gr.update(interactive=True, value="Send to Model B"),
                 )
             except Exception as e:
-                err_html = (
-                    f"<div style='color: #cc0000; background-color: #fff0f0; "
-                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
-                    f"<strong>Error:</strong> {str(e)}</div>\n\n"
-                )
+                err_round = {"prompt": user_input, "output": f"**Error:** {str(e)}", "diff": ""}
+                display_rounds = conversation_state.get("right_rounds", []) + [err_round]
+                formatted = format_all_rounds(display_rounds)
                 return (
-                    (current_response_b or "") + err_html,
+                    formatted,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(interactive=True),
@@ -2584,7 +2536,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             outputs=[model_a_input, model_a_send],
         ).then(
             fn=handle_model_a_send,
-            inputs=[model_a_input, response_a, models_state, conversation_state],
+            inputs=[model_a_input, models_state, conversation_state],
             outputs=[response_a, conversation_state, timeout_popup, model_a_input, model_a_send],
         )
         model_b_send.click(
@@ -2593,7 +2545,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             outputs=[model_b_input, model_b_send],
         ).then(
             fn=handle_model_b_send,
-            inputs=[model_b_input, response_b, models_state, conversation_state],
+            inputs=[model_b_input, models_state, conversation_state],
             outputs=[response_b, conversation_state, timeout_popup, model_b_input, model_b_send],
         )
 
