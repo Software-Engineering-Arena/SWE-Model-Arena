@@ -1613,7 +1613,7 @@ def save_content_to_hf(data, repo_name, file_name, token=None):
     filename = f"{file_name}.json"
 
     if token is None:
-        token = HfApi().token
+        token = os.getenv("HF_TOKEN") or HfApi().token
     if token is None:
         raise ValueError("Please log in to Hugging Face to submit votes.")
 
@@ -1912,6 +1912,12 @@ def toggle_submit_button(text):
 def check_auth_on_load(request: gr.Request):
     """Check if user is already authenticated when page loads."""
     token = os.getenv("HF_TOKEN") or HfApi().token
+    # Also try to get the token from the Gradio OAuth session (set after gr.LoginButton login)
+    if token is None and hasattr(request, 'oauth_token') and request.oauth_token is not None:
+        try:
+            token = request.oauth_token.token
+        except AttributeError:
+            token = str(request.oauth_token) if request.oauth_token else None
     is_authenticated = (hasattr(request, 'username') and request.username is not None and request.username != "")
 
     if is_authenticated or token:
