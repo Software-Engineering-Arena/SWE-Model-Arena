@@ -2325,17 +2325,13 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         # -- Vote handler --
 
-        def reveal_models_and_thank(models_state):
-            model_a_name = models_state.get("left", "Unknown")
-            model_b_name = models_state.get("right", "Unknown")
-            thanks_text = (
-                "## Thanks for your vote! Identities revealed below.\n"
-                f"**Model A:** {model_a_name}\n\n"
-                f"**Model B:** {model_b_name}"
-            )
-            return gr.update(value=thanks_text, visible=True)
-
         def submit_feedback(vote, models_state, conversation_state, token):
+            """Save the vote and conversation, then reveal model identities.
+
+            The vote is persisted BEFORE identities are returned to the
+            UI, ensuring the user cannot be influenced by knowing which
+            model is which.
+            """
             match vote:
                 case "Model A":
                     winner = "left"
@@ -2372,6 +2368,15 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             }
             save_content_to_hf(conv_data, CONVERSATION_REPO, file_name, token)
 
+            # Build the reveal message AFTER vote is saved
+            model_a_name = models_state.get("left", "Unknown")
+            model_b_name = models_state.get("right", "Unknown")
+            thanks_text = (
+                "## Thanks for your vote! Identities revealed below.\n"
+                f"**Model A:** {model_a_name}\n\n"
+                f"**Model B:** {model_b_name}"
+            )
+
             # Clean up temp dirs
             _cleanup_agent_resources(conversation_state)
 
@@ -2391,13 +2396,10 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(value="Submit", interactive=True, visible=True),  # [9] send_first
                 gr.update(value="Tie", interactive=True),               # [10] feedback
                 get_leaderboard_data(vote_entry, use_cache=False),      # [11] leaderboard
+                gr.update(value=thanks_text, visible=True),             # [12] thanks_message
             )
 
         submit_feedback_btn.click(
-            reveal_models_and_thank,
-            inputs=[models_state],
-            outputs=[thanks_message],
-        ).then(
             submit_feedback,
             inputs=[feedback, models_state, conversation_state, oauth_token],
             outputs=[
@@ -2407,6 +2409,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 multi_round_inputs, vote_panel,
                 send_first, feedback,
                 leaderboard_component,
+                thanks_message,
             ],
         )
 
