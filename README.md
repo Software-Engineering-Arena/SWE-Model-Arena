@@ -12,82 +12,31 @@ pinned: false
 short_description: Model arena for software engineering tasks
 ---
 
-# SWE-Model-Arena: An Interactive Platform for Evaluating Agentic Coding Models
+# SWE-Model-Arena
 
-Welcome to **SWE-Model-Arena**, an open-source platform designed for evaluating the agentic coding ability of tool-use-capable foundation models (FMs). Only models that support tool use are eligible; models lacking this capability are automatically detected and excluded. Both sides in each comparison share the **same scaffolding**, [opencode](https://opencode.ai), with identical tool access, prompts, and sandboxed environments. The **only variable** is the underlying model, isolating raw model capability from scaffolding differences.
+An open-source platform for evaluating agentic coding models head-to-head. Both sides share the **same scaffolding** ([opencode](https://opencode.ai)) with identical tools, prompts, and sandboxed environments — the **only variable** is the underlying model.
 
-## Key Features
+**[Try it on Hugging Face Spaces](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)**
 
-- **Agentic Coding Evaluation**: Models don't just answer questions. They operate as full coding agents via [opencode](https://opencode.ai), reading files, writing code, and executing commands in isolated environments.
-- **RepoChat Integration**: Automatically inject repository context (issues, commits, PRs) from GitHub, GitLab, and Hugging Face into model sessions for realistic evaluations.
-- **Multi-Round Interactions**: Engage in follow-up rounds with each model, testing their ability to iterate and refine code across multiple turns.
-- **Git Diff Comparison**: View real git diffs produced by each model side-by-side, comparing actual code changes rather than just text responses.
-- **Advanced Evaluation Metrics**: Assess models using a comprehensive suite of metrics including:
-  - **Traditional ranking metrics**: Elo ratings and win rates to measure overall model performance
-  - **Network-based metrics**: Eigenvector centrality and PageRank to identify influential models in head-to-head comparisons
-  - **Community detection metrics**: Newman modularity to reveal clusters of models with similar capabilities
-  - **Consistency metrics**: Self-play match analysis to quantify model determinism and reliability
-  - **Efficiency metrics**: Conversation efficiency index to measure coding quality relative to round count
-- **Transparent, Open-Source Leaderboard**: View real-time model rankings with full transparency.
-- **Intelligent Request Filtering**: Employ `gpt-oss-safeguard-20b` as a guardrail to automatically filter out non-software-engineering-related requests, ensuring focused and relevant evaluations.
+## Key Capabilities
 
-## Why SWE-Model-Arena?
-
-Existing evaluation frameworks (e.g. [LMArena](https://lmarena.ai)) test models on text generation tasks. SWE-Model-Arena goes further by evaluating models as **autonomous coding agents**:
-
-- Models operate in real git repositories, producing actual code changes
-- Evaluation captures the full agentic loop: file reading, code writing, command execution, and iterative refinement
-- Repository-level context through RepoChat simulates real-world development scenarios
-- Multidimensional metrics provide nuanced comparisons beyond simple text quality
-- Side-by-side git diff comparison lets users evaluate actual coding output
+- **Agentic evaluation** — models read files, write code, and execute commands in real git repos via [opencode](https://opencode.ai), not just generate text
+- **RepoChat** — auto-injects repo context (issues, commits, PRs) from GitHub / GitLab / Hugging Face
+- **Multi-round + git diff comparison** — follow up across turns and compare actual diffs side-by-side
+- **Rich leaderboard** — Elo, PageRank, modularity clustering, self-play consistency, and efficiency metrics
 
 ## How It Works
 
-1. **Submit a Task**: Sign in and input your SE-related coding task (optional: include a GitHub/GitLab/HuggingFace URL for repository context)
-2. **Models Execute**: Two randomly selected models work on your task via [OpenRouter](https://openrouter.ai), each in its own isolated directory
-3. **Compare Output**: View model output and git diffs side-by-side
-4. **Follow Up**: Send additional instructions to either model for multi-round refinement
-5. **Vote**: Choose the better model based on code quality, correctness, and approach
-
-## Getting Started
-
-### Prerequisites
-
-- A [Hugging Face](https://huggingface.co) account
-
-### Usage
-
-1. Navigate to the [SWE-Model-Arena platform](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)
-2. Sign in with your Hugging Face account
-3. Enter your coding task (optionally include a repository URL for RepoChat context)
-4. Compare model outputs and git diffs, engage in multi-round interactions
-5. Vote on which model produced better code
+1. **Submit a task** — sign in, enter a coding task (optionally include a repo URL for RepoChat context)
+2. **Models execute** — two randomly selected models work independently via [OpenRouter](https://openrouter.ai)
+3. **Compare** — view outputs and git diffs side-by-side; send follow-ups for multi-round refinement
+4. **Vote** — pick the better model based on code quality, correctness, and approach
 
 ## Contributing
 
-We welcome contributions from the community! Here's how you can help:
-
-1. **Submit SE Tasks**: Share your real-world SE problems to enrich our evaluation dataset
-2. **Report Issues**: Found a bug or have a feature request? [Open an issue](https://github.com/Software-Engineering-Arena/SWE-Model-Arena/issues/new) in this repository
-
-## Privacy Policy
-
-Your interactions are anonymized and used solely for improving SWE-Model-Arena and FM benchmarking. By using SWE-Model-Arena, you agree to our Terms of Service.
-
-## Future Plans
-
-- **Analysis of Real-World SE Workloads**: Identify common patterns and challenges in user-submitted agentic coding tasks
-- **Multi-Round Evaluation Metrics**: Develop specialized metrics for assessing model adaptation and code refinement over successive turns
-- **Expanded Model Coverage**: Include additional providers and locally hosted models
-- **Sandbox Execution**: Integrate containerized execution environments for enhanced security
-
-## Contact
-
-For inquiries or feedback, please [open an issue](https://github.com/Software-Engineering-Arena/SWE-Model-Arena/issues/new) in this repository. We welcome your contributions and suggestions!
+Submit tasks, report bugs, or request features via [GitHub Issues](https://github.com/Software-Engineering-Arena/SWE-Model-Arena/issues/new).
 
 ## Citation
-
-Made with ❤️ for SWE-Model-Arena. If this work is useful to you, please consider citing our vision paper:
 
 ```bibtex
 @inproceedings{zhao2025se,
