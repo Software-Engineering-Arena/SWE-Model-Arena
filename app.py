@@ -173,13 +173,30 @@ def start_opencode_server(agent_dir, port):
     Returns:
         The port number.
     """
-    # Give each server instance its own XDG_DATA_HOME so opencode creates
-    # a separate SQLite database per process — avoids "database is locked"
-    # errors when multiple servers run concurrently.
+    # Isolate every opencode instance inside agent_dir so concurrent servers
+    # never share state and stale files from a killed process don't bleed
+    # into the next run.
+    #
+    # XDG_DATA_HOME — opencode's SQLite DB; per-instance avoids "locked" errors.
+    # TMPDIR/TEMP/TMP — opencode writes internal temp files (incl. the JSONL
+    #   output schema) to the system temp dir using the binary name as a key
+    #   ("arg0 temp dirs").  Redirecting these into agent_dir means:
+    #     1. No cross-instance collisions between concurrent battles.
+    #     2. The stale-dir cleanup warning disappears because each dir is
+    #        fresh (UUID-named) and removed by shutil.rmtree on teardown.
+    #     3. The "Failed to read output schema file jsonl" error is gone
+    #        because the schema is always written fresh into the new dir.
+    # HOME — catches any ~/... path expansion that might escape the sandbox.
     xdg_data = os.path.join(agent_dir, ".xdg_data")
+    agent_tmp = os.path.join(agent_dir, ".tmp")
     os.makedirs(xdg_data, exist_ok=True)
+    os.makedirs(agent_tmp, exist_ok=True)
     env = os.environ.copy()
     env["XDG_DATA_HOME"] = xdg_data
+    env["TMPDIR"] = agent_tmp
+    env["TEMP"] = agent_tmp
+    env["TMP"] = agent_tmp
+    env["HOME"] = agent_dir
 
     proc = subprocess.Popen(
         ["opencode", "serve", "--port", str(port)],
