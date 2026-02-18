@@ -67,8 +67,11 @@ SYSTEM_PREFIX = (
     "If the task involves writing or modifying code, produce clean, correct, and working code. "
     "If the task involves debugging, identify and fix the root cause. "
     "If the task involves explaining, be clear and concise. "
-    "You MUST operate entirely within the current working directory. "
-    "Do NOT read, write, or execute anything outside this directory."
+    "CRITICAL CONSTRAINT: You MUST operate entirely within the current working directory. "
+    "ALL file operations (read, write, create, modify, execute) must be within this directory. "
+    "Do NOT access any files or directories outside your current working directory. "
+    "Use relative paths only (e.g., './file.py', 'subdir/file.txt'), never absolute paths like '/tmp/', '/home/', etc. "
+    "If you attempt to access files outside the working directory, the operation will fail."
 )
 
 # ---------------------------------------------------------------------------
@@ -994,6 +997,98 @@ def fetch_url_content(url):
 
 
 # ---------------------------------------------------------------------------
+# Folder validation helpers
+# ---------------------------------------------------------------------------
+
+def detect_folder_violation_error(error_message, agent_dir):
+    """Detect if an error indicates the agent tried to access files outside its directory.
+    
+    Args:
+        error_message: The error message from the agent
+        agent_dir: The designated working directory for the agent
+    
+    Returns:
+        bool: True if this appears to be a folder violation error
+    """
+    if not error_message:
+        return False
+    
+    error_str = str(error_message).lower()
+    
+    # Common patterns indicating folder violations
+    violation_patterns = [
+        "permission denied",
+        "no such file or directory",
+        "cannot access", 
+        "operation not permitted",
+        "access denied",
+        "file not found",
+        "path not found",
+        "directory not found"
+    ]
+    
+    # Check if error contains violation patterns AND references paths outside agent_dir
+    has_violation_pattern = any(pattern in error_str for pattern in violation_patterns)
+    
+    if has_violation_pattern:
+        # Look for absolute path references that are outside the agent directory
+        import re
+        absolute_paths = re.findall(r'[/\\][a-zA-Z0-9_/\\.-]+', error_message)
+        for path in absolute_paths:
+            if agent_dir not in path and not path.startswith('./') and not path.startswith('../'):
+                return True
+                
+        # Look for common problematic paths
+        problematic_paths = [
+            '/tmp/', '/home/', '/usr/', '/var/', '/etc/', '/opt/', '/root/',
+            'c:\\', 'd:\\', 'c:/', 'd:/', '~/'
+        ]
+        if any(bad_path in error_str for bad_path in problematic_paths):
+            return True
+    
+    return False
+
+
+def analyze_agent_output_for_violations(output, error, agent_dir):
+    """Analyze agent output and errors for folder violations.
+    
+    Args:
+        output: Agent's text output
+        error: Agent's error message (if any)
+        agent_dir: The designated working directory
+    
+    Returns:
+        bool: True if folder violations detected
+    """
+    # Check explicit error messages
+    if error and detect_folder_violation_error(error, agent_dir):
+        return True
+    
+    # Check output for violation indicators
+    if output:
+        output_str = str(output).lower()
+        violation_indicators = [
+            "cannot create",
+            "cannot write", 
+            "cannot read",
+            "access denied",
+            "permission denied",
+            "file not found",
+            "no such file"
+        ]
+        
+        # Also check for absolute path usage in output
+        if any(indicator in output_str for indicator in violation_indicators):
+            import re
+            absolute_paths = re.findall(r'[/\\][a-zA-Z0-9_/\\.-]+', output)
+            for path in absolute_paths:
+                if agent_dir not in path:
+                    return True
+    
+    return False
+
+
+# ---------------------------------------------------------------------------
 # opencode agent dispatcher (SDK-based with session continuity)
 # ---------------------------------------------------------------------------
 
@@ -1254,11 +1349,27 @@ async def run_agent_with_retry(agent_dir, port, prompt, preferred_model=None,
         result = await run_agent(port, model_id, prompt)
 
         if result.get("ok"):
+            # Check for folder violations in first round (this function is only called for first round)
+            output = result.get("output", "")
+            if analyze_agent_output_for_violations(output, None, agent_dir):
+                print(f"[Agent:{port}] Model {model_name} violated folder constraints, retrying with another...")
+                tried.add(model_name)
+                stop_opencode_server(port)
+                continue
+            
             # Success — server stays running for follow-up rounds
             return model_name, result
 
-        # Any failure — stop server and retry with a different model
-        print(f"[Agent:{port}] Model {model_name} failed (error={result.get('error', 'unknown')}), retrying with another...")
+        # Check if this was a retryable error or folder violation
+        error_msg = result.get('error', 'unknown')
+        output = result.get('output', '')
+        
+        # For first round, check if it's a folder violation
+        if analyze_agent_output_for_violations(output, error_msg, agent_dir):
+            print(f"[Agent:{port}] Model {model_name} violated folder constraints (error={error_msg}), retrying with another...")
+        else:
+            print(f"[Agent:{port}] Model {model_name} failed (error={error_msg}), retrying with another...")
+        
         tried.add(model_name)
         stop_opencode_server(port)
 
