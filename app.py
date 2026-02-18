@@ -167,9 +167,18 @@ def start_opencode_server(agent_dir, port):
     Returns:
         The port number.
     """
+    # Give each server instance its own XDG_DATA_HOME so opencode creates
+    # a separate SQLite database per process — avoids "database is locked"
+    # errors when multiple servers run concurrently.
+    xdg_data = os.path.join(agent_dir, ".xdg_data")
+    os.makedirs(xdg_data, exist_ok=True)
+    env = os.environ.copy()
+    env["XDG_DATA_HOME"] = xdg_data
+
     proc = subprocess.Popen(
         ["opencode", "serve", "--port", str(port)],
         cwd=agent_dir,
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -217,6 +226,7 @@ model_context_window = {}
 model_name_to_id = {}
 model_organization = {}
 available_models = []
+active_models = []  # Only models with state != "inactive" (used for pairwise selection)
 
 _api = HfApi()
 for _file in _api.list_repo_files(repo_id=MODEL_REPO, repo_type="dataset"):
@@ -231,6 +241,9 @@ for _file in _api.list_repo_files(repo_id=MODEL_REPO, repo_type="dataset"):
     model_context_window[_model_name] = _record["context_window"]
     model_name_to_id[_model_name] = _record["id"]
     model_organization[_model_name] = _model_name.split(": ")[0]
+    # Track active models for pairwise selection
+    if _record.get("state") != "inactive":
+        active_models.append(_model_name)
 
 
 
@@ -1200,7 +1213,7 @@ async def run_agent_with_retry(agent_dir, port, prompt, preferred_model=None,
                 "session_id": None,
             }
 
-        candidates = [m for m in available_models if m not in tried]
+        candidates = [m for m in active_models if m not in tried]
         if not candidates:
             return model_name, {
                 "ok": False, "output": "",
@@ -1249,8 +1262,8 @@ async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port,
     """
     global_deadline = time.time() + BATTLE_TIMEOUT
 
-    left_preferred = random.choice(available_models)
-    right_candidates = [m for m in available_models if m != left_preferred]
+    left_preferred = random.choice(active_models)
+    right_candidates = [m for m in active_models if m != left_preferred]
     right_preferred = random.choice(right_candidates) if right_candidates else left_preferred
 
     (left_name, result_a), (right_name, result_b) = await asyncio.gather(
