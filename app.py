@@ -1561,8 +1561,8 @@ def _checkout_ref(parsed_info, agent_dir):
 def capture_diff(agent_dir):
     """Capture the cumulative git diff for an agent's working directory.
 
-    Excludes opencode infrastructure files (opencode.json config and
-    .opencode/ session database) so only the agent's actual work appears.
+    Stages all changes then diffs against HEAD, excluding opencode
+    infrastructure files so only the agent's actual work appears.
     """
     subprocess.run(
         ["git", "add", "-A"],
@@ -1570,8 +1570,12 @@ def capture_diff(agent_dir):
     )
     result = subprocess.run(
         [
-            "git", "diff", "--cached", "--",
-            ".", ":(exclude)opencode.json", ":(exclude).opencode",
+            "git", "diff", "HEAD", "--",
+            ".",
+            ":(exclude)opencode.json",
+            ":(exclude).opencode",
+            ":(exclude).xdg_data",
+            ":(exclude).tmp",
         ],
         cwd=agent_dir, capture_output=True,
     )
@@ -2216,6 +2220,14 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                         clone_repo(repo_url, d)
                     else:
                         subprocess.run(["git", "init"], cwd=d, capture_output=True)
+                        # Create an initial empty commit so HEAD always exists.
+                        # Without this, `git diff --cached` returns nothing on an
+                        # unborn branch, making all diffs appear empty.
+                        subprocess.run(
+                            ["git", "-c", "user.name=arena", "-c", "user.email=arena@localhost",
+                             "commit", "--allow-empty", "-m", "init"],
+                            cwd=d, capture_output=True,
+                        )
 
                 # Run both agents in parallel with automatic retry.
                 # Each side writes its own opencode config, starts the
