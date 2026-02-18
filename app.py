@@ -266,8 +266,8 @@ for _file in _api.list_repo_files(repo_id=MODEL_REPO, repo_type="dataset"):
     model_context_window[_model_name] = _record["context_window"]
     model_name_to_id[_model_name] = _record["id"]
     model_organization[_model_name] = _model_name.split(": ")[0]
-    # Track active models for pairwise selection
-    if _record.get("state") != "inactive":
+    # Track active models for pairwise selection (must be active and support tool calling)
+    if _record.get("state") != "inactive" and _record.get("tool_calling") is True:
         active_models.append(_model_name)
 
 
