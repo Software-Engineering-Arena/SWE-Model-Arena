@@ -1583,10 +1583,23 @@ def capture_diff(agent_dir):
 # ---------------------------------------------------------------------------
 
 def format_all_rounds(rounds):
-    """Format all agent rounds for display (output + latest diff)."""
+    """Format all agent rounds for display.
+
+    Each round shows the user bubble, the model bubble, and — when the
+    agent produced file changes — the cumulative git diff up to that
+    round.  Rendering the diff per-round (rather than once at the end)
+    means successive responses always re-check and refresh the diff.
+    """
+    SEPARATOR = (
+        "<div style='text-align: center; color: #888888; margin: 16px 0; "
+        "border-top: 1px solid #dddddd; padding-top: 10px;'>"
+        "<em>--- Follow-up ---</em></div>\n\n"
+    )
     formatted = ""
     for i, r in enumerate(rounds):
         prompt = strip_context(r["prompt"]) if i == 0 else r["prompt"]
+        if i > 0:
+            formatted += SEPARATOR
         formatted += (
             f"<div style='color: #0066cc; background-color: #f0f7ff; "
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
@@ -1597,8 +1610,11 @@ def format_all_rounds(rounds):
             f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
             f"<strong>Model:</strong> {r['output']}</div>\n\n"
         )
-    if rounds and rounds[-1].get("diff"):
-        formatted += f"\n**Git Diff:**\n```diff\n{rounds[-1]['diff']}\n```"
+        if r.get("diff"):
+            formatted += (
+                f"\n**Git Diff (cumulative after round {i + 1}):**\n"
+                f"```diff\n{r['diff']}\n```\n\n"
+            )
     return formatted
 
 
@@ -2388,7 +2404,13 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=False, value="Processing..."),
             )
 
-        def handle_model_a_send(user_input, models_state, conversation_state):
+        def handle_model_a_send(user_input, current_response_a, models_state, conversation_state):
+            """Handle a follow-up message for Model A.
+
+            Appends the new exchange to the *existing* response panel content
+            so the full chat history is always visible.  The git diff is
+            re-captured after every round and shown inline.
+            """
             try:
                 port = conversation_state["left_port"]
                 session_id = conversation_state["left_session_id"]
@@ -2411,25 +2433,60 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 conversation_state["left_rounds"].append({
                     "prompt": user_input, "output": output, "diff": diff,
                 })
+                round_num = len(conversation_state["left_rounds"])
 
-                formatted = format_all_rounds(conversation_state["left_rounds"])
+                # Build this round's HTML and append to the existing display
+                # so the full history (including the initial response) is shown.
+                separator = (
+                    "<div style='text-align: center; color: #888888; margin: 16px 0; "
+                    "border-top: 1px solid #dddddd; padding-top: 10px;'>"
+                    "<em>--- Follow-up ---</em></div>\n\n"
+                )
+                new_html = (
+                    separator
+                    + f"<div style='color: #0066cc; background-color: #f0f7ff; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>User:</strong> {user_input}</div>\n\n"
+                    f"<div style='color: #006633; background-color: #f0fff0; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>Model:</strong> {output}</div>\n\n"
+                )
+                if diff:
+                    new_html += (
+                        f"\n**Git Diff (cumulative after round {round_num}):**\n"
+                        f"```diff\n{diff}\n```\n\n"
+                    )
+
+                updated_response = (current_response_a or "") + new_html
                 return (
-                    formatted,
+                    updated_response,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
                     gr.update(interactive=False, value="Send to Model A"),
                 )
             except TimeoutError:
+                # Preserve existing history; show the timeout popup.
                 return (
-                    gr.update(value=""),
+                    current_response_a,
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
                     gr.update(interactive=True, value="Send to Model A"),
                 )
             except Exception as e:
-                raise gr.Error(str(e))
+                err_html = (
+                    f"<div style='color: #cc0000; background-color: #fff0f0; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>Error:</strong> {str(e)}</div>\n\n"
+                )
+                return (
+                    (current_response_a or "") + err_html,
+                    conversation_state,
+                    gr.update(visible=False),
+                    gr.update(interactive=True),
+                    gr.update(interactive=True, value="Send to Model A"),
+                )
 
         def disable_model_b_ui():
             return (
@@ -2437,7 +2494,13 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(interactive=False, value="Processing..."),
             )
 
-        def handle_model_b_send(user_input, models_state, conversation_state):
+        def handle_model_b_send(user_input, current_response_b, models_state, conversation_state):
+            """Handle a follow-up message for Model B.
+
+            Appends the new exchange to the *existing* response panel content
+            so the full chat history is always visible.  The git diff is
+            re-captured after every round and shown inline.
+            """
             try:
                 port = conversation_state["right_port"]
                 session_id = conversation_state["right_session_id"]
@@ -2460,25 +2523,60 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 conversation_state["right_rounds"].append({
                     "prompt": user_input, "output": output, "diff": diff,
                 })
+                round_num = len(conversation_state["right_rounds"])
 
-                formatted = format_all_rounds(conversation_state["right_rounds"])
+                # Build this round's HTML and append to the existing display
+                # so the full history (including the initial response) is shown.
+                separator = (
+                    "<div style='text-align: center; color: #888888; margin: 16px 0; "
+                    "border-top: 1px solid #dddddd; padding-top: 10px;'>"
+                    "<em>--- Follow-up ---</em></div>\n\n"
+                )
+                new_html = (
+                    separator
+                    + f"<div style='color: #0066cc; background-color: #f0f7ff; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>User:</strong> {user_input}</div>\n\n"
+                    f"<div style='color: #006633; background-color: #f0fff0; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>Model:</strong> {output}</div>\n\n"
+                )
+                if diff:
+                    new_html += (
+                        f"\n**Git Diff (cumulative after round {round_num}):**\n"
+                        f"```diff\n{diff}\n```\n\n"
+                    )
+
+                updated_response = (current_response_b or "") + new_html
                 return (
-                    formatted,
+                    updated_response,
                     conversation_state,
                     gr.update(visible=False),
                     gr.update(value="", interactive=True),
                     gr.update(interactive=False, value="Send to Model B"),
                 )
             except TimeoutError:
+                # Preserve existing history; show the timeout popup.
                 return (
-                    gr.update(value=""),
+                    current_response_b,
                     conversation_state,
                     gr.update(visible=True),
                     gr.update(interactive=True),
                     gr.update(interactive=True, value="Send to Model B"),
                 )
             except Exception as e:
-                raise gr.Error(str(e))
+                err_html = (
+                    f"<div style='color: #cc0000; background-color: #fff0f0; "
+                    f"padding: 10px; border-radius: 5px; margin-bottom: 10px;'>"
+                    f"<strong>Error:</strong> {str(e)}</div>\n\n"
+                )
+                return (
+                    (current_response_b or "") + err_html,
+                    conversation_state,
+                    gr.update(visible=False),
+                    gr.update(interactive=True),
+                    gr.update(interactive=True, value="Send to Model B"),
+                )
 
         model_a_send.click(
             fn=disable_model_a_ui,
@@ -2486,7 +2584,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             outputs=[model_a_input, model_a_send],
         ).then(
             fn=handle_model_a_send,
-            inputs=[model_a_input, models_state, conversation_state],
+            inputs=[model_a_input, response_a, models_state, conversation_state],
             outputs=[response_a, conversation_state, timeout_popup, model_a_input, model_a_send],
         )
         model_b_send.click(
@@ -2495,7 +2593,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             outputs=[model_b_input, model_b_send],
         ).then(
             fn=handle_model_b_send,
-            inputs=[model_b_input, models_state, conversation_state],
+            inputs=[model_b_input, response_b, models_state, conversation_state],
             outputs=[response_b, conversation_state, timeout_popup, model_b_input, model_b_send],
         )
 
