@@ -3,6 +3,7 @@
 # - Evalica: https://github.com/dustalov/evalica/blob/master/Chatbot-Arena.ipynb
 
 import asyncio
+import concurrent.futures
 import dotenv
 import evalica
 import gitlab
@@ -240,6 +241,25 @@ def stop_opencode_server(port):
 
 # Initialize opencode binary
 _ensure_opencode()
+
+
+def _run_agent_in_thread(agent_dir, port, prompt, preferred_model, global_deadline):
+    """Synchronous wrapper around run_agent_with_retry for use in threads.
+
+    Each call spins up its own event loop so multiple threads can run
+    async agent logic concurrently without sharing a loop.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            run_agent_with_retry(
+                agent_dir, port, prompt,
+                preferred_model=preferred_model,
+                global_deadline=global_deadline,
+            )
+        )
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2033,12 +2053,12 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
     with gr.Tab("⚔️Arena"):
         gr.Markdown("# ⚔️ SWE-Model-Arena")
-        gr.Markdown("Blind head-to-head agentic coding model comparison — same scaffold (opencode), different LLM")
+        gr.Markdown("Blind head-to-head agentic coding model comparison — same scaffold (opencode), different tool-calling LLM")
 
         gr.Markdown("### 📜 How It Works")
         gr.Markdown(
             f"""
-            - **Blind Comparison**: Submit a coding task — two randomly selected LLMs will tackle it independently (up to {len(available_models)} models).
+            - **Blind Comparison**: Submit a coding task — two randomly selected tool-calling LLMs will tackle it independently (up to {len(active_models)} models).
             - **Same Scaffold, Different Brain**: Both models run on [opencode](https://github.com/opencode-ai/opencode) — an agentic coding engine that reads files, writes code, and runs commands. Only the underlying LLM differs.
             - **Real Diffs**: Each model works in its own isolated git repo. You see the actual code changes, not just chat responses.
             - **Multi-round & Vote**: Send follow-up instructions to either side, then vote for the better model. Fair play — votes count only while identities stay hidden.
@@ -2165,7 +2185,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
         ):
             # Guardrail check (skip if URL provided)
             if not repo_url and not guardrail_check_se_relevance(user_input):
-                return (
+                yield (
                     gr.update(value="### Oops! Try asking something about software engineering. Thanks!", visible=True),
                     gr.update(value="", interactive=True, visible=True),
                     gr.update(value="", interactive=True, visible=True),
@@ -2185,6 +2205,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     gr.update(interactive=False),
                     gr.update(visible=False),
                 )
+                return
 
             # Fetch repo context
             repo_info = fetch_url_content(repo_url)
@@ -2205,6 +2226,10 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             # Allocate ports for opencode servers
             left_port = find_free_port()
             right_port = find_free_port()
+
+            display_content = f"### Your Query:\n\n{user_input}"
+            if repo_info:
+                display_content += f"\n\n### Repo-related URL:\n\n{repo_url}"
 
             def _cleanup_on_error():
                 """Stop servers and remove temp dirs on failure."""
@@ -2229,40 +2254,139 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                             cwd=d, capture_output=True,
                         )
 
-                # Run both agents in parallel with automatic retry.
-                # Each side writes its own opencode config, starts the
-                # server, runs the agent, and restarts with a new model
-                # if the current one is not usable.
-                loop = asyncio.new_event_loop()
-                left_name, right_name, result_a, result_b = (
-                    loop.run_until_complete(
-                        run_first_round_with_retry(
-                            left_dir, right_dir,
-                            left_port, right_port,
-                            left_prompt, right_prompt,
+                # Pre-select two distinct preferred models (mirrors run_first_round_with_retry).
+                global_deadline = time.time() + BATTLE_TIMEOUT
+                left_preferred = random.choice(active_models)
+                right_candidates = [m for m in active_models if m != left_preferred]
+                right_preferred = random.choice(right_candidates) if right_candidates else left_preferred
+
+                # Run both agents concurrently in threads so we can yield
+                # partial results as soon as the first agent finishes.
+                partial = {
+                    "left_name": None, "left_result": None, "left_diff": None,
+                    "right_name": None, "right_result": None, "right_diff": None,
+                }
+                futures_map = {}
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    futures_map[executor.submit(
+                        _run_agent_in_thread,
+                        left_dir, left_port, left_prompt, left_preferred, global_deadline,
+                    )] = "left"
+                    futures_map[executor.submit(
+                        _run_agent_in_thread,
+                        right_dir, right_port, right_prompt, right_preferred, global_deadline,
+                    )] = "right"
+
+                    for future in concurrent.futures.as_completed(futures_map):
+                        side = futures_map[future]
+                        name, result = future.result()
+
+                        if not result.get("ok"):
+                            err = result.get("error", "unknown")
+                            label = "A" if side == "left" else "B"
+                            print(f"[Arena] Agent {label} failed: {err}")
+                            result["output"] = f"**Model error:** {err}"
+
+                        diff = capture_diff(left_dir if side == "left" else right_dir)
+                        partial[f"{side}_name"] = name
+                        partial[f"{side}_result"] = result
+                        partial[f"{side}_diff"] = diff
+
+                        both_done = (
+                            partial["left_result"] is not None
+                            and partial["right_result"] is not None
                         )
-                    )
-                )
-                loop.close()
 
-                selected = [left_name, right_name]
-                models = {"left": left_name, "right": right_name}
+                        left_rounds = (
+                            [{"prompt": left_prompt,
+                              "output": partial["left_result"]["output"],
+                              "diff": partial["left_diff"]}]
+                            if partial["left_result"] else None
+                        )
+                        right_rounds = (
+                            [{"prompt": right_prompt,
+                              "output": partial["right_result"]["output"],
+                              "diff": partial["right_diff"]}]
+                            if partial["right_result"] else None
+                        )
 
-                # Log agent errors but don't abort — show error in the
-                # agent's output panel so the user can still compare.
-                for label, result in [("A", result_a), ("B", result_b)]:
-                    if not result.get("ok"):
-                        err = result.get("error", "unknown")
-                        print(f"[Arena] Agent {label} failed: {err}")
-                        result["output"] = f"**Model error:** {err}"
+                        display_a = (
+                            format_all_rounds(left_rounds)
+                            if left_rounds else "\u23f3 *Waiting for model...*"
+                        )
+                        display_b = (
+                            format_all_rounds(right_rounds)
+                            if right_rounds else "\u23f3 *Waiting for model...*"
+                        )
 
-                # Capture diffs
-                diff_a = capture_diff(left_dir)
-                diff_b = capture_diff(right_dir)
+                        if both_done:
+                            # Final state — update shared state and enable multi-round.
+                            models_state.clear()
+                            models_state.update({
+                                "left": partial["left_name"],
+                                "right": partial["right_name"],
+                            })
+                            conversation_state.clear()
+                            conversation_state.update({
+                                "left": partial["left_name"],
+                                "right": partial["right_name"],
+                                "url": repo_url or "",
+                                "left_dir": left_dir, "right_dir": right_dir,
+                                "left_port": left_port, "right_port": right_port,
+                                "left_session_id": partial["left_result"].get("session_id"),
+                                "right_session_id": partial["right_result"].get("session_id"),
+                                "left_rounds": left_rounds,
+                                "right_rounds": right_rounds,
+                            })
+                            yield (
+                                gr.update(visible=False),                          # [0] guardrail_message
+                                gr.update(interactive=True, visible=False),        # [1] shared_input
+                                gr.update(interactive=True, visible=False),        # [2] repo_url
+                                gr.update(value=display_content, visible=True),    # [3] user_prompt_md
+                                gr.update(value="### Model A", visible=True),      # [4] response_a_title
+                                gr.update(value="### Model B", visible=True),      # [5] response_b_title
+                                gr.update(value=display_a),                        # [6] response_a
+                                gr.update(value=display_b),                        # [7] response_b
+                                gr.update(visible=True),                           # [8] multi_round_inputs
+                                gr.update(visible=True),                           # [9] vote_panel
+                                gr.update(visible=False, value="Submit"),          # [10] send_first
+                                gr.update(interactive=True),                       # [11] feedback
+                                models_state,                                      # [12] models_state
+                                conversation_state,                                # [13] conversation_state
+                                gr.update(visible=False),                          # [14] timeout_popup
+                                toggle_submit_button(""),                          # [15] model_a_send
+                                toggle_submit_button(""),                          # [16] model_b_send
+                                gr.update(visible=False),                          # [17] thanks_message
+                            )
+                        else:
+                            # Partial state — first agent done, second still running.
+                            # Show vote panel early so the user can vote based on
+                            # latency / first impression. Multi-round stays hidden
+                            # until both agents are done and state is fully populated.
+                            yield (
+                                gr.update(visible=False),                          # [0] guardrail_message
+                                gr.update(interactive=True, visible=False),        # [1] shared_input
+                                gr.update(interactive=True, visible=False),        # [2] repo_url
+                                gr.update(value=display_content, visible=True),    # [3] user_prompt_md
+                                gr.update(value="### Model A", visible=True),      # [4] response_a_title
+                                gr.update(value="### Model B", visible=True),      # [5] response_b_title
+                                gr.update(value=display_a),                        # [6] response_a
+                                gr.update(value=display_b),                        # [7] response_b
+                                gr.update(visible=False),                          # [8] multi_round_inputs (wait for both)
+                                gr.update(visible=True),                           # [9] vote_panel (early!)
+                                gr.update(visible=False, value="Submit"),          # [10] send_first
+                                gr.update(interactive=True),                       # [11] feedback
+                                models_state,                                      # [12] models_state (not yet complete)
+                                conversation_state,                                # [13] conversation_state (not yet complete)
+                                gr.update(visible=False),                          # [14] timeout_popup
+                                toggle_submit_button(""),                          # [15] model_a_send
+                                toggle_submit_button(""),                          # [16] model_b_send
+                                gr.update(visible=False),                          # [17] thanks_message
+                            )
 
             except TimeoutError as e:
                 _cleanup_on_error()
-                return (
+                yield (
                     gr.update(visible=False),                               # [0] guardrail_message
                     gr.update(interactive=True, visible=True),              # [1] shared_input
                     gr.update(interactive=True, visible=True),              # [2] repo_url
@@ -2282,9 +2406,10 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     gr.update(interactive=False),                           # [16] model_b_send
                     gr.update(visible=False),                               # [17] thanks_message
                 )
+                return
             except Exception as e:
                 _cleanup_on_error()
-                return (
+                yield (
                     gr.update(value=f"### Error: {str(e)}", visible=True),  # [0] guardrail_message
                     gr.update(interactive=True, visible=True),              # [1] shared_input
                     gr.update(interactive=True, visible=True),              # [2] repo_url
@@ -2304,49 +2429,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                     gr.update(interactive=False),                           # [16] model_b_send
                     gr.update(visible=False),                               # [17] thanks_message
                 )
-
-            # Update state (ports + session_ids kept for follow-up rounds)
-            models_state.clear()
-            models_state.update(models)
-            conversation_state.clear()
-            conversation_state.update({
-                "left": selected[0], "right": selected[1],
-                "url": repo_url or "",
-                "left_dir": left_dir, "right_dir": right_dir,
-                "left_port": left_port, "right_port": right_port,
-                "left_session_id": result_a.get("session_id"),
-                "right_session_id": result_b.get("session_id"),
-                "left_rounds": [{"prompt": left_prompt, "output": result_a["output"], "diff": diff_a}],
-                "right_rounds": [{"prompt": right_prompt, "output": result_b["output"], "diff": diff_b}],
-            })
-
-            # Format display
-            display_a = format_all_rounds(conversation_state["left_rounds"])
-            display_b = format_all_rounds(conversation_state["right_rounds"])
-            display_content = f"### Your Query:\n\n{user_input}"
-            if repo_info:
-                display_content += f"\n\n### Repo-related URL:\n\n{repo_url}"
-
-            return (
-                gr.update(visible=False),                          # [0] guardrail_message
-                gr.update(interactive=True, visible=False),        # [1] shared_input
-                gr.update(interactive=True, visible=False),        # [2] repo_url
-                gr.update(value=display_content, visible=True),    # [3] user_prompt_md
-                gr.update(value="### Model A", visible=True),      # [4] response_a_title
-                gr.update(value="### Model B", visible=True),      # [5] response_b_title
-                gr.update(value=display_a),                        # [6] response_a
-                gr.update(value=display_b),                        # [7] response_b
-                gr.update(visible=True),                           # [8] multi_round_inputs
-                gr.update(visible=True),                           # [9] vote_panel
-                gr.update(visible=False, value="Submit"),          # [10] send_first
-                gr.update(interactive=True),                       # [11] feedback
-                models_state,                                      # [12] models_state
-                conversation_state,                                # [13] conversation_state
-                gr.update(visible=False),                          # [14] timeout_popup
-                toggle_submit_button(""),                          # [15] model_a_send
-                toggle_submit_button(""),                          # [16] model_b_send
-                gr.update(visible=False),                          # [17] thanks_message
-            )
+                return
 
         # Feedback panel, initially hidden
         with gr.Column(visible=False) as vote_panel:

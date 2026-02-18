@@ -14,7 +14,7 @@ short_description: Model arena for software engineering tasks
 
 # SWE-Model-Arena
 
-An open-source platform for evaluating agentic coding models head-to-head. Both sides share the **same scaffolding** ([opencode](https://opencode.ai)) with identical tools, prompts, and sandboxed environments — the **only variable** is the underlying model.
+An open-source platform for evaluating agentic coding models head-to-head. Both sides share the **same scaffolding** ([opencode](https://opencode.ai)) with identical tools, prompts, and sandboxed environments — the **only variable** is the underlying tool-calling model.
 
 **[Try it on Hugging Face Spaces](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)**
 
@@ -28,7 +28,7 @@ An open-source platform for evaluating agentic coding models head-to-head. Both 
 ## How It Works
 
 1. **Submit a task** — sign in, enter a coding task (optionally include a repo URL for RepoChat context)
-2. **Models execute** — two randomly selected models work independently via [OpenRouter](https://openrouter.ai)
+2. **Models execute** — two randomly selected tool-calling models work independently via [OpenRouter](https://openrouter.ai)
 3. **Compare** — view outputs and git diffs side-by-side; send follow-ups for multi-round refinement
 4. **Vote** — pick the better model based on code quality, correctness, and approach
 
