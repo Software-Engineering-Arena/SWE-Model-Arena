@@ -14,7 +14,7 @@ short_description: Model arena for software engineering tasks
 
 # SWE-Model-Arena
 
-An open-source platform for evaluating agentic coding models head-to-head. Both sides share the **same scaffolding** ([opencode](https://opencode.ai)) with identical tools, prompts, and sandboxed environments — the **only variable** is the underlying tool-calling model.
+An open-source platform for evaluating tool-calling models head-to-head. Both sides share the **same scaffolding** ([opencode](https://opencode.ai)) with identical tools, prompts, and sandboxed environments — the **only variable** is the underlying tool-calling model.
 
 **[Try it on Hugging Face Spaces](https://huggingface.co/spaces/SWE-Arena/SWE-Model-Arena)**
 

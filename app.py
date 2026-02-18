@@ -2053,7 +2053,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
     with gr.Tab("⚔️Arena"):
         gr.Markdown("# ⚔️ SWE-Model-Arena")
-        gr.Markdown("Blind head-to-head agentic coding model comparison — same scaffold (opencode), different tool-calling LLM")
+        gr.Markdown("Blind head-to-head tool-calling model comparison — same scaffold (opencode), different tool-calling LLM")
 
         gr.Markdown("### 📜 How It Works")
         gr.Markdown(
