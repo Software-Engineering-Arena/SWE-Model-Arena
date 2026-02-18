@@ -1088,9 +1088,13 @@ async def run_agent(port, model_id, prompt, session_id=None):
             except Exception as chat_err:
                 # Log the full error details for debugging
                 if hasattr(chat_err, "response"):
+                    try:
+                        body = chat_err.response.content[:500].decode("utf-8", errors="replace")
+                    except Exception:
+                        body = "(unreadable)"
                     print(f"[Agent:{port}] chat() error response: "
                           f"status={chat_err.response.status_code} "
-                          f"body={chat_err.response.text[:500]}")
+                          f"body={body}")
                 if hasattr(chat_err, "request"):
                     req = chat_err.request
                     print(f"[Agent:{port}] chat() request: "
@@ -1110,7 +1114,14 @@ async def run_agent(port, model_id, prompt, session_id=None):
 
             while time.time() < deadline:
                 await asyncio.sleep(poll_interval)
-                messages = await client.session.messages(session_id)
+                try:
+                    messages = await client.session.messages(session_id)
+                except UnicodeDecodeError:
+                    # The opencode server may include binary file content
+                    # in session messages, causing UTF-8 decode failures.
+                    # Skip this poll and retry on the next iteration.
+                    print(f"[Agent:{port}] Skipping poll — response contained non-UTF-8 data")
+                    continue
 
                 # Find the last assistant message and check completion
                 for msg in reversed(messages):
@@ -1168,7 +1179,7 @@ async def run_agent(port, model_id, prompt, session_id=None):
             error_detail = f"HTTP {e.status_code}: {e}"
         if hasattr(e, "response") and e.response is not None:
             try:
-                body_preview = e.response.text[:1000]
+                body_preview = e.response.content[:1000].decode("utf-8", errors="replace")
                 print(f"[Agent:{port}] Error response body: {body_preview}")
             except Exception:
                 pass
@@ -1411,9 +1422,9 @@ def capture_diff(agent_dir):
             "git", "diff", "--cached", "--",
             ".", ":(exclude)opencode.json", ":(exclude).opencode",
         ],
-        cwd=agent_dir, capture_output=True, text=True,
+        cwd=agent_dir, capture_output=True,
     )
-    return result.stdout[:100_000]
+    return result.stdout.decode("utf-8", errors="replace")[:100_000]
 
 
 # ---------------------------------------------------------------------------
