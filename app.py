@@ -1229,11 +1229,12 @@ async def run_agent_with_retry(agent_dir, port, prompt, preferred_model=None,
         print(f"[Agent:{port}] Attempt {attempt}/{len(available_models)}: model={model_name}")
         result = await run_agent(port, model_id, prompt)
 
-        if not result.get("retryable"):
-            # Success (or non-retryable error) — server stays running
+        if result.get("ok"):
+            # Success — server stays running for follow-up rounds
             return model_name, result
 
-        print(f"[Agent:{port}] Model {model_name} not usable, retrying with another...")
+        # Any failure — stop server and retry with a different model
+        print(f"[Agent:{port}] Model {model_name} failed (error={result.get('error', 'unknown')}), retrying with another...")
         tried.add(model_name)
         stop_opencode_server(port)
 
@@ -1249,7 +1250,8 @@ async def run_first_round_with_retry(left_dir, right_dir, left_port, right_port,
     global_deadline = time.time() + BATTLE_TIMEOUT
 
     left_preferred = random.choice(available_models)
-    right_preferred = random.choice(available_models)
+    right_candidates = [m for m in available_models if m != left_preferred]
+    right_preferred = random.choice(right_candidates) if right_candidates else left_preferred
 
     (left_name, result_a), (right_name, result_b) = await asyncio.gather(
         run_agent_with_retry(
@@ -1873,10 +1875,6 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         user_prompt_md = gr.Markdown(value="", visible=False)
 
-        with gr.Column():
-            shared_input
-            user_prompt_md
-
         with gr.Row():
             response_a_title = gr.Markdown(value="", visible=False)
             response_b_title = gr.Markdown(value="", visible=False)
@@ -2139,7 +2137,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 )
                 submit_feedback_btn = gr.Button("Submit Feedback", interactive=False)
 
-        thanks_message = gr.Markdown(value="## Thanks for your vote!", visible=False)
+        thanks_message = gr.Markdown(value="", visible=False)
 
         def hide_thanks_message():
             return gr.update(visible=False)
@@ -2314,6 +2312,16 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
 
         # -- Vote handler --
 
+        def reveal_models_and_thank(models_state):
+            model_a_name = models_state.get("left", "Unknown")
+            model_b_name = models_state.get("right", "Unknown")
+            thanks_text = (
+                "## Thanks for your vote! Identities revealed below.\n"
+                f"**Model A:** {model_a_name}\n\n"
+                f"**Model B:** {model_b_name}"
+            )
+            return gr.update(value=thanks_text, visible=True)
+
         def submit_feedback(vote, models_state, conversation_state, token):
             match vote:
                 case "Model A":
@@ -2354,25 +2362,15 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             # Clean up temp dirs
             _cleanup_agent_resources(conversation_state)
 
-            # Capture model names before clearing state
-            model_a_name = models_state.get("left", "Unknown")
-            model_b_name = models_state.get("right", "Unknown")
-
             models_state.clear()
             conversation_state.clear()
-
-            thanks_text = (
-                "## Thanks for your vote! Identities revealed above.\n"
-                f"**Model A:** {model_a_name}\n\n"
-                f"**Model B:** {model_b_name}"
-            )
 
             return (
                 gr.update(value="", interactive=True, visible=True),    # [0] shared_input
                 gr.update(value="", interactive=True, visible=True),    # [1] repo_url
                 gr.update(value="", visible=False),                     # [2] user_prompt_md
-                gr.update(value=f"### Model A: {model_a_name}", visible=True),  # [3] response_a_title
-                gr.update(value=f"### Model B: {model_b_name}", visible=True),  # [4] response_b_title
+                gr.update(value="", visible=False),                     # [3] response_a_title
+                gr.update(value="", visible=False),                     # [4] response_b_title
                 gr.update(value=""),                                    # [5] response_a
                 gr.update(value=""),                                    # [6] response_b
                 gr.update(visible=False),                               # [7] multi_round_inputs
@@ -2380,10 +2378,13 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 gr.update(value="Submit", interactive=True, visible=True),  # [9] send_first
                 gr.update(value="Tie", interactive=True),               # [10] feedback
                 get_leaderboard_data(vote_entry, use_cache=False),      # [11] leaderboard
-                gr.update(value=thanks_text, visible=True),             # [12] thanks_message
             )
 
         submit_feedback_btn.click(
+            reveal_models_and_thank,
+            inputs=[models_state],
+            outputs=[thanks_message],
+        ).then(
             submit_feedback,
             inputs=[feedback, models_state, conversation_state, oauth_token],
             outputs=[
@@ -2392,7 +2393,7 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
                 response_a, response_b,
                 multi_round_inputs, vote_panel,
                 send_first, feedback,
-                leaderboard_component, thanks_message,
+                leaderboard_component,
             ],
         )
 
