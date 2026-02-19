@@ -1991,6 +1991,136 @@ def check_auth_on_load(request: gr.Request):
 
 
 # ---------------------------------------------------------------------------
+# Model Submission
+# ---------------------------------------------------------------------------
+
+def validate_model_id(model_id):
+    """
+    Validate that the model ID is accessible via the OpenRouter API.
+
+    Args:
+        model_id (str): OpenRouter model identifier (e.g. "anthropic/claude-sonnet-4.6").
+
+    Returns:
+        tuple: (is_valid: bool, message: str)
+    """
+    try:
+        response = openai_client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "user", "content": "Hi"}],
+            max_tokens=5,
+        )
+        if response and response.choices:
+            return True, "Model ID is valid."
+        return False, "Model did not return a valid response."
+    except Exception as e:
+        return False, str(e)
+
+
+def submit_model(display_name, organization, model_id, context_window, tool_calling, token=None):
+    """
+    Validate inputs and upload a new model JSON record to MODEL_REPO.
+
+    The file will be stored as  ``{Organization}: {Display Name}.json``
+    with the following schema::
+
+        {
+            "id":             "<openrouter-model-id>",
+            "context_window": <int>,
+            "tool_calling":   true|false,
+            "state":          "active"
+        }
+
+    Args:
+        display_name (str): Human-readable model name  (e.g. "Claude Sonnet 4.6").
+        organization (str): Provider / organisation     (e.g. "Anthropic").
+        model_id     (str): OpenRouter model identifier (e.g. "anthropic/claude-sonnet-4.6").
+        context_window (str|int): Maximum context length in tokens.
+        tool_calling (bool): Whether the model supports tool/function calling.
+        token        (str|None): Hugging Face token for upload authentication.
+
+    Returns:
+        str: A status message describing success or the reason for failure.
+    """
+    # ---- basic field validation ----
+    if not display_name or not display_name.strip():
+        return "\u274c Model display name is required."
+    if not organization or not organization.strip():
+        return "\u274c Organization name is required."
+    if not model_id or not model_id.strip():
+        return "\u274c OpenRouter model ID is required."
+    if not context_window:
+        return "\u274c Context window size is required."
+
+    display_name  = display_name.strip()
+    organization  = organization.strip()
+    model_id      = model_id.strip()
+
+    # ---- context_window must be a positive integer ----
+    try:
+        context_window = int(str(context_window).replace(",", "").strip())
+        if context_window <= 0:
+            raise ValueError
+    except ValueError:
+        return "\u274c Context window must be a positive integer."
+
+    # ---- model_id should look like  provider/name ----
+    if "/" not in model_id:
+        return "\u274c Model ID must follow the format  provider/model-name  (e.g. anthropic/claude-sonnet-4.6)."
+
+    # ---- validate model ID against OpenRouter ----
+    is_valid, msg = validate_model_id(model_id)
+    if not is_valid:
+        return f"\u274c Model ID validation failed: {msg}"
+
+    # ---- compute the canonical file name ----
+    file_stem    = f"{organization}: {display_name}"   # e.g. "Anthropic: Claude Sonnet 4.6"
+    hf_filename  = f"{file_stem}.json"
+
+    # ---- duplicate check ----
+    try:
+        api = HfApi()
+        existing_files = list(api.list_repo_files(repo_id=MODEL_REPO, repo_type="dataset"))
+        existing_stems = {f.replace(".json", "") for f in existing_files if f.endswith(".json")}
+        if file_stem in existing_stems:
+            return f"\u26a0\ufe0f A model named **{file_stem}** already exists in the dataset."
+    except Exception as e:
+        return f"\u274c Could not check for duplicates: {e}"
+
+    # ---- build the JSON record ----
+    record = {
+        "id":             model_id,
+        "context_window": context_window,
+        "tool_calling":   bool(tool_calling),
+        "state":          "active",
+    }
+
+    # ---- upload to Hugging Face ----
+    try:
+        json_bytes = json.dumps(record, indent=4).encode("utf-8")
+        file_obj   = io.BytesIO(json_bytes)
+
+        upload_token = token or os.getenv("HF_TOKEN") or HfApi().token
+        if not upload_token:
+            return "\u274c You must be signed in to submit a model."
+
+        upload_file(
+            path_or_fileobj=file_obj,
+            path_in_repo=hf_filename,
+            repo_id=MODEL_REPO,
+            repo_type="dataset",
+            token=upload_token,
+        )
+    except Exception as e:
+        return f"\u274c Upload failed: {e}"
+
+    return (
+        f"\u2705 **{file_stem}** successfully submitted!\n\n"
+        "The model will appear in the Arena after the maintainers review and activate it."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Gradio app
 # ---------------------------------------------------------------------------
 
@@ -2751,6 +2881,86 @@ with gr.Blocks(title="SWE-Model-Arena", theme=gr.themes.Soft()) as app:
             - Please do not upload any **private** information.
             - The service collects user dialogue data, including both text and images, and reserves the right to distribute it under a **Creative Commons Attribution (CC-BY)** or a similar license.
             """
+        )
+
+    with gr.Tab("📬 Submit Model"):
+        gr.Markdown("# 📬 Submit Your Model")
+        gr.Markdown(
+            "Add your model to SWE-Model-Arena so the community can evaluate it. "
+            "All submissions are reviewed by the maintainers before the model goes live."
+        )
+        gr.Markdown("---")
+
+        with gr.Row():
+            with gr.Column():
+                submit_display_name = gr.Textbox(
+                    label="Model Display Name *",
+                    placeholder='e.g. "Claude Sonnet 4.6"',
+                    info="The human-readable name shown in the Arena and Leaderboard.",
+                )
+                submit_organization = gr.Textbox(
+                    label="Organization *",
+                    placeholder='e.g. "Anthropic"',
+                    info="The company or team that created the model. "
+                         "The leaderboard entry will be shown as  Organization: Model Name.",
+                )
+            with gr.Column():
+                submit_model_id = gr.Textbox(
+                    label="OpenRouter Model ID *",
+                    placeholder='e.g. "anthropic/claude-sonnet-4.6"',
+                    info="The model identifier used to call the model via OpenRouter "
+                         "(https://openrouter.ai/models). Must follow the format  provider/model-name.",
+                )
+                submit_context_window = gr.Number(
+                    label="Context Window (tokens) *",
+                    precision=0,
+                    minimum=1,
+                    info="Maximum number of tokens the model can handle in a single request.",
+                )
+
+        submit_tool_calling = gr.Checkbox(
+            label="Supports Tool / Function Calling",
+            value=False,
+            info="Check this if the model supports tool/function calling via the OpenRouter API.",
+        )
+
+        submit_model_btn = gr.Button("Submit Model", variant="primary")
+
+        submission_status_md = gr.Markdown(value="", visible=False)
+
+        def _submit_model_handler(display_name, organization, model_id, context_window, tool_calling, token):
+            result = submit_model(display_name, organization, model_id, context_window, tool_calling, token)
+            return gr.update(value=result, visible=True)
+
+        submit_model_btn.click(
+            fn=_submit_model_handler,
+            inputs=[
+                submit_display_name,
+                submit_organization,
+                submit_model_id,
+                submit_context_window,
+                submit_tool_calling,
+                oauth_token,
+            ],
+            outputs=[submission_status_md],
+        )
+
+        gr.Markdown("---")
+        gr.Markdown(
+            "### JSON Schema\n\n"
+            "Each submitted model is stored as a JSON file in the "
+            "[SWE-Arena/model_data](https://huggingface.co/datasets/SWE-Arena/model_data) dataset "
+            "with the following structure:\n\n"
+            "```json\n"
+            "{\n"
+            '    "id":             "<openrouter-model-id>",\n'
+            '    "context_window": <int>,\n'
+            '    "tool_calling":   true|false,\n'
+            '    "state":          "active"\n'
+            "}\n"
+            "```\n\n"
+            'The file is named  `{Organization}: {Model Display Name}.json`  '
+            "(e.g. `Anthropic: Claude Sonnet 4.6.json`)."
         )
 
     app.load(
