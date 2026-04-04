@@ -1,13 +1,7 @@
-# Environment variables
-.env
-
-# Python
+.claude
+.omc
+*.env
 *.venv
 *.ipynb
 *.pyc
-__pycache__/
-
-# Editor
-.claude
-.vscode
-.omc
+*.duckdb
